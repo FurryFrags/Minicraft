@@ -21,6 +21,15 @@
       transition: opacity 80ms linear;
       z-index: 2;
     }
+    #hitFlash {
+      position: fixed; inset: 0;
+      pointer-events: none;
+      background: rgba(255, 255, 255, 0.35);
+      opacity: 0;
+      transition: opacity 120ms ease;
+      z-index: 3;
+    }
+    #hitFlash.active { opacity: 1; }
 
     /* HUD */
     #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.85); }
@@ -183,6 +192,23 @@
       box-shadow: 0 2px 6px rgba(0,0,0,.35);
       background-repeat: no-repeat;
       image-rendering: pixelated;
+    }
+    .hb-slot .durability, .slot .durability {
+      position: absolute;
+      left: 5px;
+      right: 5px;
+      bottom: 4px;
+      height: 4px;
+      background: rgba(0,0,0,.55);
+      border-radius: 999px;
+      overflow: hidden;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.15);
+    }
+    .durability .durabilityFill {
+      height: 100%;
+      width: 100%;
+      background: linear-gradient(90deg, rgba(80,220,80,.95), rgba(240,210,60,.95));
+      transition: width 120ms ease;
     }
 
     /* Menu overlay */
@@ -571,6 +597,7 @@
 </div>
 
 <div id="fluidTint"></div>
+<div id="hitFlash"></div>
 
   <div id="hud">
     <div id="crosshair"></div>
@@ -705,6 +732,7 @@
     const heldFaceRightEl = document.getElementById("heldFaceRight");
     const steveHandEl = document.getElementById("steveHand");
     const fluidTintEl = document.getElementById("fluidTint");
+    const hitFlashEl = document.getElementById("hitFlash");
     const statusHudEl = document.getElementById("statusHud");
     const paletteGridEl = document.getElementById("paletteGrid");
     const chatWrap = document.getElementById("chatWrap");
@@ -2748,6 +2776,39 @@ if (camMode === CAM_MODE.FIRST) {
       { id: B.DIAMOND_HOE, name: "Diamond Hoe", icon: T.diamond_hoe, cat: "tools" },
     ];
 
+    const WEAPON_STATS = {
+      [B.WOODEN_SWORD]: { damage: 4, reach: 3.1, cooldown: 0.55, durability: 59 },
+      [B.WOODEN_AXE]: { damage: 3, reach: 2.9, cooldown: 0.7, durability: 59 },
+      [B.WOODEN_PICKAXE]: { damage: 2, reach: 2.7, cooldown: 0.65, durability: 59 },
+      [B.WOODEN_SHOVEL]: { damage: 1, reach: 2.6, cooldown: 0.6, durability: 59 },
+      [B.WOODEN_HOE]: { damage: 1, reach: 2.6, cooldown: 0.6, durability: 59 },
+      [B.STONE_SWORD]: { damage: 5, reach: 3.2, cooldown: 0.55, durability: 131 },
+      [B.STONE_AXE]: { damage: 4, reach: 3.0, cooldown: 0.7, durability: 131 },
+      [B.STONE_PICKAXE]: { damage: 3, reach: 2.8, cooldown: 0.65, durability: 131 },
+      [B.STONE_SHOVEL]: { damage: 2, reach: 2.7, cooldown: 0.6, durability: 131 },
+      [B.STONE_HOE]: { damage: 2, reach: 2.7, cooldown: 0.6, durability: 131 },
+      [B.IRON_SWORD]: { damage: 6, reach: 3.3, cooldown: 0.5, durability: 250 },
+      [B.IRON_AXE]: { damage: 5, reach: 3.1, cooldown: 0.65, durability: 250 },
+      [B.IRON_PICKAXE]: { damage: 4, reach: 2.9, cooldown: 0.6, durability: 250 },
+      [B.IRON_SHOVEL]: { damage: 3, reach: 2.8, cooldown: 0.55, durability: 250 },
+      [B.IRON_HOE]: { damage: 3, reach: 2.8, cooldown: 0.55, durability: 250 },
+      [B.DIAMOND_SWORD]: { damage: 7, reach: 3.4, cooldown: 0.5, durability: 1561 },
+      [B.DIAMOND_AXE]: { damage: 6, reach: 3.2, cooldown: 0.6, durability: 1561 },
+      [B.DIAMOND_PICKAXE]: { damage: 5, reach: 3.0, cooldown: 0.6, durability: 1561 },
+      [B.DIAMOND_SHOVEL]: { damage: 4, reach: 2.9, cooldown: 0.55, durability: 1561 },
+      [B.DIAMOND_HOE]: { damage: 4, reach: 2.9, cooldown: 0.55, durability: 1561 },
+    };
+
+    const DEFAULT_ATTACK_STATS = { damage: 1, reach: 2.5, cooldown: 0.45, durability: 0 };
+
+    function weaponStatsFor(id) {
+      return WEAPON_STATS[id] || DEFAULT_ATTACK_STATS;
+    }
+
+    function maxDurabilityFor(id) {
+      return WEAPON_STATS[id]?.durability ?? 0;
+    }
+
     function blockName(id) {
       if (id === B.AIR) return "Empty";
       const f = BLOCK_LIST.find(b => b.id === id);
@@ -3628,6 +3689,71 @@ function getColumn(x, z) {
     }
 
     // ======================================================
+    // Entities (targets + mobs)
+    // ======================================================
+    const entityGroup = new THREE.Group();
+    scene.add(entityGroup);
+
+    const ENTITY_TYPES = {
+      target: { name: "Target Dummy", kind: "target", color: 0xffd27a, size: { w: 0.8, h: 1.4, d: 0.5 }, health: 14 },
+      hostile: { name: "Hostile Slime", kind: "hostile", color: 0xff6b6b, size: { w: 0.9, h: 0.9, d: 0.9 }, health: 10 },
+      passive: { name: "Passive Moo", kind: "passive", color: 0x7ee081, size: { w: 1.0, h: 1.0, d: 1.2 }, health: 12 },
+    };
+
+    const entities = [];
+    let nextEntityId = 1;
+
+    function groundYAt(wx, wz) {
+      for (let y = WORLD_H - 2; y >= 0; y--) {
+        if (isSolid(getBlock(wx, y, wz))) return y + 1;
+      }
+      return SEA_LEVEL + 1;
+    }
+
+    function spawnEntity(typeKey, wx, wz) {
+      const def = ENTITY_TYPES[typeKey];
+      if (!def) return null;
+      const y = groundYAt(wx, wz);
+      const size = new THREE.Vector3(def.size.w, def.size.h, def.size.d);
+      const pos = new THREE.Vector3(wx, y, wz);
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(size.x, size.y, size.z),
+        new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.8, metalness: 0.05 })
+      );
+      mesh.position.set(pos.x, pos.y + size.y / 2, pos.z);
+      mesh.castShadow = false;
+      mesh.receiveShadow = true;
+      entityGroup.add(mesh);
+      const ent = {
+        id: nextEntityId++,
+        type: typeKey,
+        kind: def.kind,
+        name: def.name,
+        pos,
+        size,
+        health: def.health,
+        maxHealth: def.health,
+        mesh,
+      };
+      entities.push(ent);
+      return ent;
+    }
+
+    function removeEntity(ent) {
+      const idx = entities.indexOf(ent);
+      if (idx !== -1) entities.splice(idx, 1);
+      if (ent.mesh) entityGroup.remove(ent.mesh);
+    }
+
+    function entityAabb(ent) {
+      const halfX = ent.size.x * 0.5;
+      const halfZ = ent.size.z * 0.5;
+      const min = new THREE.Vector3(ent.pos.x - halfX, ent.pos.y, ent.pos.z - halfZ);
+      const max = new THREE.Vector3(ent.pos.x + halfX, ent.pos.y + ent.size.y, ent.pos.z + halfZ);
+      return { min, max };
+    }
+
+    // ======================================================
     // Chunk objects + meshing (faster build via local voxel cache)
     // ======================================================
     const chunks = new Map(); // key -> {cx,cz, meshes:[]}
@@ -4086,6 +4212,11 @@ function syncCamera() { camera.position.set(player.pos.x, player.pos.y + current
 syncCamera();
     applyLook();
 
+    // Spawn demo entities near the player spawn.
+    spawnEntity("target", Math.round(player.pos.x + 3), Math.round(player.pos.z + 2));
+    spawnEntity("hostile", Math.round(player.pos.x - 4), Math.round(player.pos.z + 1));
+    spawnEntity("passive", Math.round(player.pos.x + 2), Math.round(player.pos.z - 4));
+
     // ======================================================
 // Inventory (Minecraft-ish stacks)
 // ======================================================
@@ -4118,10 +4249,14 @@ function normItem(it) {
   const id = (it.id|0);
   const count = (it.count|0);
   if (id === B.AIR || count <= 0) return null;
-  return { id, count: Math.min(STACK_MAX, count) };
+  const maxDur = maxDurabilityFor(id);
+  const rawDur = (typeof it.durability === "number") ? it.durability : maxDur;
+  const durability = maxDur > 0 ? Math.max(1, Math.min(maxDur, rawDur)) : 0;
+  return { id, count: Math.min(STACK_MAX, count), durability: durability || undefined };
 }
 function slotId(i) { return invSlots[i]?.id ?? B.AIR; }
 function slotCount(i) { return invSlots[i]?.count ?? 0; }
+function slotDurability(i) { return invSlots[i]?.durability ?? 0; }
 
 function setSlot(i, it) {
   invSlots[i] = normItem(it);
@@ -4130,6 +4265,23 @@ function setSlot(i, it) {
 function selectedItem() { return invSlots[hotbarIndex]; }
 function isToolId(id) { return id >= B.WOODEN_SWORD && id <= B.DIAMOND_HOE; }
 function isPlaceableId(id) { return !isToolId(id); }
+
+function damageSelectedWeapon(amount = 1) {
+  const s = invSlots[hotbarIndex];
+  if (!s) return;
+  const maxDur = maxDurabilityFor(s.id);
+  if (!maxDur) return;
+  if (typeof s.durability !== "number") s.durability = maxDur;
+  s.durability -= amount;
+  if (s.durability <= 0) {
+    s.count -= 1;
+    if (s.count <= 0) {
+      invSlots[hotbarIndex] = null;
+    } else {
+      s.durability = maxDur;
+    }
+  }
+}
 
 function selectedBlock() {
   if (slotCount(hotbarIndex) <= 0) return B.AIR;
@@ -4187,7 +4339,8 @@ function consumeFromSelected(n=1) {
 
 function setSelectedCreative(blockId) {
   if (blockId === B.AIR) { invSlots[hotbarIndex] = null; return; }
-  invSlots[hotbarIndex] = { id: blockId, count: STACK_MAX };
+  const maxDur = maxDurabilityFor(blockId);
+  invSlots[hotbarIndex] = { id: blockId, count: STACK_MAX, durability: maxDur || undefined };
 }
 
 function updateInvModeUI() {
@@ -4222,6 +4375,22 @@ function renderCount(el, n) {
   el.appendChild(c);
 }
 
+function renderDurability(el, slot) {
+  const old = el.querySelector(".durability");
+  if (old) old.remove();
+  if (!slot) return;
+  const maxDur = maxDurabilityFor(slot.id);
+  if (!maxDur) return;
+  const current = Math.max(0, Math.min(maxDur, slot.durability ?? maxDur));
+  const d = document.createElement("div");
+  d.className = "durability";
+  const fill = document.createElement("div");
+  fill.className = "durabilityFill";
+  fill.style.width = `${Math.max(0, Math.min(1, current / maxDur)) * 100}%`;
+  d.appendChild(fill);
+  el.appendChild(d);
+}
+
 function renderHotbarHud() {
   hotbarHudEl.innerHTML = "";
   for (let i=0; i<HOTBAR_SIZE; i++) {
@@ -4232,6 +4401,7 @@ function renderHotbarHud() {
     setSlotSwatch(sw, slotId(i));
     d.appendChild(sw);
     renderCount(d, slotCount(i));
+    renderDurability(d, invSlots[i]);
     hotbarHudEl.appendChild(d);
   }
   updateHeldModel();
@@ -4247,6 +4417,7 @@ function renderInvHotbar() {
     setSlotSwatch(sw, slotId(i));
     d.appendChild(sw);
     renderCount(d, slotCount(i));
+    renderDurability(d, invSlots[i]);
     d.addEventListener("mousedown", (e) => handleSlotMouseDown(i, e));
 invHotbarEl.appendChild(d);
   }
@@ -4263,6 +4434,7 @@ function renderInvMain() {
     setSlotSwatch(sw, slotId(i));
     d.appendChild(sw);
     renderCount(d, slotCount(i));
+    renderDurability(d, invSlots[i]);
     d.addEventListener("mousedown", (e) => handleSlotMouseDown(i, e));
     invMainEl.appendChild(d);
   }
@@ -4355,7 +4527,7 @@ function tryMoveToRange(fromIdx, toStart, toEnd) {
   // Merge first.
   for (let i=toStart; i<=toEnd && left>0; i++) {
     const t = invSlots[i];
-    if (!t || t.id !== src.id || t.count >= STACK_MAX) continue;
+    if (!t || t.id !== src.id || t.count >= STACK_MAX || (t.durability ?? 0) !== (src.durability ?? 0)) continue;
     const can = Math.min(STACK_MAX - t.count, left);
     t.count += can;
     left -= can;
@@ -4399,22 +4571,22 @@ function handleSlotMouseDown(idx, e) {
     if (!c && s) {
       // Pick up half (ceil) into cursor
       const take = Math.ceil(s.count / 2);
-      cursorStack = { id: s.id, count: take };
+      cursorStack = { id: s.id, count: take, durability: s.durability };
       const rem = s.count - take;
-      invSlots[idx] = rem > 0 ? { id: s.id, count: rem } : null;
+      invSlots[idx] = rem > 0 ? { id: s.id, count: rem, durability: s.durability } : null;
       refreshInventoryUI();
       return;
     }
     if (c) {
       // Place 1 into empty slot, or add 1 to matching stack
       if (!s) {
-        invSlots[idx] = { id: c.id, count: 1 };
+        invSlots[idx] = { id: c.id, count: 1, durability: c.durability };
         c.count -= 1;
         cursorStack = (c.count > 0) ? c : null;
         refreshInventoryUI();
         return;
       }
-      if (s.id === c.id && s.count < STACK_MAX) {
+      if (s.id === c.id && s.count < STACK_MAX && (s.durability ?? 0) === (c.durability ?? 0)) {
         s.count += 1;
         c.count -= 1;
         cursorStack = (c.count > 0) ? c : null;
@@ -4431,7 +4603,7 @@ function handleSlotMouseDown(idx, e) {
   // Left click behavior
   if (!c && s) {
     // Pick up full stack
-    cursorStack = { id: s.id, count: s.count };
+    cursorStack = { id: s.id, count: s.count, durability: s.durability };
     invSlots[idx] = null;
     refreshInventoryUI();
     return;
@@ -4440,13 +4612,13 @@ function handleSlotMouseDown(idx, e) {
   if (c) {
     if (!s) {
       // Place full stack into empty slot
-      invSlots[idx] = { id: c.id, count: c.count };
+      invSlots[idx] = { id: c.id, count: c.count, durability: c.durability };
       cursorStack = null;
       refreshInventoryUI();
       return;
     }
 
-    if (s.id === c.id && s.count < STACK_MAX) {
+    if (s.id === c.id && s.count < STACK_MAX && (s.durability ?? 0) === (c.durability ?? 0)) {
       const can = Math.min(STACK_MAX - s.count, c.count);
       s.count += can;
       c.count -= can;
@@ -4457,8 +4629,8 @@ function handleSlotMouseDown(idx, e) {
     }
 
     // Swap
-    invSlots[idx] = { id: c.id, count: c.count };
-    cursorStack = { id: s.id, count: s.count };
+    invSlots[idx] = { id: c.id, count: c.count, durability: c.durability };
+    cursorStack = { id: s.id, count: s.count, durability: s.durability };
     refreshInventoryUI();
     return;
   }
@@ -4532,6 +4704,88 @@ try { updateHeldBlock3D(); } catch(_) {}
 // ======================================================
     // Block interactions (use DDA hit)
     // ======================================================
+    let lastAttackAt = 0;
+    let hitFlashTimer = null;
+
+    function triggerHitFlash() {
+      if (!hitFlashEl) return;
+      hitFlashEl.classList.add("active");
+      if (hitFlashTimer) clearTimeout(hitFlashTimer);
+      hitFlashTimer = setTimeout(() => {
+        hitFlashEl.classList.remove("active");
+      }, 120);
+    }
+
+    function rayAabb(origin, dir, min, max, maxDist) {
+      let tmin = 0;
+      let tmax = maxDist;
+      const axes = ["x", "y", "z"];
+      for (const axis of axes) {
+        const o = origin[axis];
+        const d = dir[axis];
+        const minA = min[axis];
+        const maxA = max[axis];
+        if (Math.abs(d) < 1e-6) {
+          if (o < minA || o > maxA) return null;
+        } else {
+          let t1 = (minA - o) / d;
+          let t2 = (maxA - o) / d;
+          if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+          tmin = Math.max(tmin, t1);
+          tmax = Math.min(tmax, t2);
+          if (tmax < tmin) return null;
+        }
+      }
+      return tmin;
+    }
+
+    function raycastEntity(origin, dir, maxDist) {
+      let closest = null;
+      for (const ent of entities) {
+        if (!ent || ent.health <= 0) continue;
+        const { min, max } = entityAabb(ent);
+        const dist = rayAabb(origin, dir, min, max, maxDist);
+        if (dist === null || dist > maxDist) continue;
+        if (!closest || dist < closest.dist) {
+          closest = {
+            entity: ent,
+            dist,
+            point: origin.clone().addScaledVector(dir, dist),
+          };
+        }
+      }
+      return closest;
+    }
+
+    function attemptAttack() {
+      const now = performance.now();
+      const held = selectedItem();
+      const stats = weaponStatsFor(held?.id ?? B.AIR);
+      if (now - lastAttackAt < stats.cooldown * 1000) return false;
+
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      dir.normalize();
+      const hit = raycastEntity(camera.position, dir, stats.reach);
+      if (!hit) return false;
+
+      lastAttackAt = now;
+      hit.entity.health = Math.max(0, hit.entity.health - stats.damage);
+      triggerSwing();
+      triggerHitFlash();
+
+      if (stats.durability > 0) damageSelectedWeapon(1);
+
+      if (hit.entity.health <= 0) {
+        addChatMessage(`${hit.entity.name} defeated`);
+        removeEntity(hit.entity);
+      }
+
+      renderHotbarHud();
+      if (inventoryOpen) refreshInventoryUI();
+      return true;
+    }
+
     function currentHit() {
       const dir = new THREE.Vector3();
       camera.getWorldDirection(dir);
@@ -4618,13 +4872,15 @@ try { updateHeldBlock3D(); } catch(_) {}
 
     window.addEventListener("mousedown", (e) => {
       if (!gameActive()) return;
-      triggerSwing();
     
       if (e.button === 0) { // break (continuous while held)
-        lmbHeld = true;
-        const hit = currentHit();
-        breakAt(hit);
-        lastMineTime = performance.now();
+        const attacked = attemptAttack();
+        if (!attacked) {
+          lmbHeld = true;
+          const hit = currentHit();
+          breakAt(hit);
+          lastMineTime = performance.now();
+        }
       }
     
       if (e.button === 1) { // pick
