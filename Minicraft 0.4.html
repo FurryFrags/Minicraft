@@ -720,7 +720,6 @@
     // ======================================================
     const CHUNK = 16;
     const RADIUS = 4;              // view distance in chunks
-    const MAX_LOADS_PER_FRAME = 1; // stability > speed
 
     // ======================================================
     // Player
@@ -4283,191 +4282,88 @@ function touchChunkCache(key, entry) {
   }
 }
 
-function getChunkData(cx, cz) {
-  const key = chunkKey(cx, cz);
-  const version = chunkEditVersion.get(key) || 0;
-  const cached = chunkDataCache.get(key);
-  if (cached && cached.version === version) {
-    touchChunkCache(key, cached);
-    return cached;
-  }
-
-  const wx0 = cx * CHUNK;
-  const wz0 = cz * CHUNK;
-  const yMax = estimateChunkYMax(cx, cz);
-  const H = Math.min(WORLD_H, yMax + 3);
-  const data = new Uint8Array(CHUNK * CHUNK * H);
-  const idx = (lx, lz, y) => (y * CHUNK + lz) * CHUNK + lx;
-
-  for (let y=0; y<H; y++) {
-    for (let lz=0; lz<CHUNK; lz++) for (let lx=0; lx<CHUNK; lx++) {
-      const wx = wx0 + lx;
-      const wz = wz0 + lz;
-      data[idx(lx,lz,y)] = getBlock(wx, y, wz);
-    }
-  }
-
-  const entry = { data, H, yMax, version };
-  touchChunkCache(key, entry);
-  return entry;
-}
-
-        function buildChunkMeshes(cx, cz) {
-      const wx0 = cx * CHUNK;
-      const wz0 = cz * CHUNK;
-
-      // cache voxel values for the chunk (avoid scanning empty sky)
-      const { data, H, yMax } = getChunkData(cx, cz);
-      const idx = (lx, lz, y) => (y * CHUNK + lz) * CHUNK + lx;
-
-      function getLocal(lx,lz,y){
-        if (y < 0) return B.AIR;
-        if (lx>=0 && lx<CHUNK && lz>=0 && lz<CHUNK && y>=0 && y<H) return data[idx(lx,lz,y)];
-        // neighbor chunk OR above cached range
-        const wx = wx0 + lx;
-        const wz = wz0 + lz;
-        return getBlock(wx, y, wz);
-      }
-
-      // ------------------------------------------------------
-      // Opaque blocks: keep instancing (fast)
-      // Transparent blocks (glass/water/lava): build face-only meshes
-      // so sides between adjacent transparent blocks are never visible.
-      // ------------------------------------------------------
-
-      const positions = new Map(); // opaque id -> array of {x,y,z}
-
-      // face-only buffers for transparent blocks
+    function makeTransparentBuffers() {
       function makeBuf(){ return { pos: [], norm: [], uv: [], idx: [], v: 0 }; }
-      const tbuf = new Map([
+      return new Map([
         [B.GLASS, makeBuf()],
         [B.WATER, makeBuf()],
         [B.LAVA,  makeBuf()],
       ]);
+    }
 
-      // Transparent face visibility:
-      // - Glass never draws internal faces against any solid neighbor (prevents "cross-transparency" holes).
-      // - Water/Lava draw faces against AIR and against GLASS so they remain visible behind glass.
-      // - Water beats Lava at water-lava boundaries to avoid coplanar z-fighting artifacts.
-      function transFaceVisible(cur, neigh) {
-        if (neigh === B.AIR) return true;
+    function transFaceVisible(cur, neigh) {
+      if (neigh === B.AIR) return true;
 
-        if (cur === B.GLASS) return false;
+      if (cur === B.GLASS) return false;
 
-        if (cur === B.WATER) {
-          if (neigh === B.WATER) return false;
-          if (neigh === B.LAVA)  return true;   // water wins boundary
-          if (neigh === B.GLASS) return true;   // visible behind glass
-          return false; // against opaque solids: hidden
-        }
+      if (cur === B.WATER) {
+        if (neigh === B.WATER) return false;
+        if (neigh === B.LAVA)  return true;   // water wins boundary
+        if (neigh === B.GLASS) return true;   // visible behind glass
+        return false; // against opaque solids: hidden
+      }
 
-        if (cur === B.LAVA) {
-          if (neigh === B.LAVA)  return false;
-          if (neigh === B.WATER) return false;  // water wins boundary
-          if (neigh === B.GLASS) return true;   // visible behind glass
-          return false;
-        }
-
+      if (cur === B.LAVA) {
+        if (neigh === B.LAVA)  return false;
+        if (neigh === B.WATER) return false;  // water wins boundary
+        if (neigh === B.GLASS) return true;   // visible behind glass
         return false;
       }
 
-      function pushFace(buf, x, y, z, face, tileIdx) {
-        const r = tileUVRect(tileIdx);
-        let nx=0, ny=0, nz=0;
+      return false;
+    }
 
-        // 4 vertices per face (positions)
-        // Vertex order is chosen so triangles are CCW when viewed from outside.
-        let v0, v1, v2, v3;
-        switch (face) {
-          case 0: // +X
-            nx=1;
-            v0=[x+1, y+1, z  ]; v1=[x+1, y+1, z+1]; v2=[x+1, y,   z  ]; v3=[x+1, y,   z+1];
-            break;
-          case 1: // -X
-            nx=-1;
-            v0=[x, y+1, z+1]; v1=[x, y+1, z  ]; v2=[x, y,   z+1]; v3=[x, y,   z  ];
-            break;
-          case 2: // +Y (top)
-            ny=1;
-            // IMPORTANT: winding must be CCW when viewed from above (+Y), otherwise the face is back-culled.
-            v0=[x,   y+1, z+1]; v1=[x+1, y+1, z+1]; v2=[x,   y+1, z  ]; v3=[x+1, y+1, z  ];
-            break;
-          case 3: // -Y (bottom)
-            ny=-1;
-            // CCW when viewed from below (-Y).
-            v0=[x,   y, z  ]; v1=[x+1, y, z  ]; v2=[x,   y, z+1]; v3=[x+1, y, z+1];
-            break;
-          case 4: // +Z
-            nz=1;
-            v0=[x+1, y+1, z+1]; v1=[x,   y+1, z+1]; v2=[x+1, y,   z+1]; v3=[x,   y,   z+1];
-            break;
-          default: // 5 -Z
-            nz=-1;
-            v0=[x,   y+1, z  ]; v1=[x+1, y+1, z  ]; v2=[x,   y,   z  ]; v3=[x+1, y,   z  ];
-            break;
-        }
+    function pushFace(buf, x, y, z, face, tileIdx) {
+      const r = tileUVRect(tileIdx);
+      let nx=0, ny=0, nz=0;
 
-        const base = buf.v;
-
-        buf.pos.push(...v0, ...v1, ...v2, ...v3);
-        for (let i=0;i<4;i++) buf.norm.push(nx,ny,nz);
-
-        // UVs: (u0,v1) (u1,v1) (u0,v0) (u1,v0)
-        buf.uv.push(r.u0, r.v1,  r.u1, r.v1,  r.u0, r.v0,  r.u1, r.v0);
-
-        // two triangles
-        buf.idx.push(base, base+1, base+2,  base+2, base+1, base+3);
-
-        buf.v += 4;
+      // 4 vertices per face (positions)
+      // Vertex order is chosen so triangles are CCW when viewed from outside.
+      let v0, v1, v2, v3;
+      switch (face) {
+        case 0: // +X
+          nx=1;
+          v0=[x+1, y+1, z  ]; v1=[x+1, y+1, z+1]; v2=[x+1, y,   z  ]; v3=[x+1, y,   z+1];
+          break;
+        case 1: // -X
+          nx=-1;
+          v0=[x, y+1, z+1]; v1=[x, y+1, z  ]; v2=[x, y,   z+1]; v3=[x, y,   z  ];
+          break;
+        case 2: // +Y (top)
+          ny=1;
+          // IMPORTANT: winding must be CCW when viewed from above (+Y), otherwise the face is back-culled.
+          v0=[x,   y+1, z+1]; v1=[x+1, y+1, z+1]; v2=[x,   y+1, z  ]; v3=[x+1, y+1, z  ];
+          break;
+        case 3: // -Y (bottom)
+          ny=-1;
+          // CCW when viewed from below (-Y).
+          v0=[x,   y, z  ]; v1=[x+1, y, z  ]; v2=[x,   y, z+1]; v3=[x+1, y, z+1];
+          break;
+        case 4: // +Z
+          nz=1;
+          v0=[x+1, y+1, z+1]; v1=[x,   y+1, z+1]; v2=[x+1, y,   z+1]; v3=[x,   y,   z+1];
+          break;
+        default: // 5 -Z
+          nz=-1;
+          v0=[x,   y+1, z  ]; v1=[x+1, y+1, z  ]; v2=[x,   y,   z  ]; v3=[x+1, y,   z  ];
+          break;
       }
 
-      for (let lz=0; lz<CHUNK; lz++) for (let lx=0; lx<CHUNK; lx++) {
-        const wx = wx0 + lx;
-        const wz = wz0 + lz;
+      const base = buf.v;
 
-        for (let y=0; y<=yMax; y++) {
-          const t = getLocal(lx,lz,y);
-          if (!isSolid(t)) continue;
+      buf.pos.push(...v0, ...v1, ...v2, ...v3);
+      for (let i=0;i<4;i++) buf.norm.push(nx,ny,nz);
 
-          // Transparent blocks: draw only faces that are actually visible (AIR, and fluids behind glass).
-          if (isTransparentBlock(t)) {
-            const buf = tbuf.get(t);
-            if (!buf) continue;
+      // UVs: (u0,v1) (u1,v1) (u0,v0) (u1,v0)
+      buf.uv.push(r.u0, r.v1,  r.u1, r.v1,  r.u0, r.v0,  r.u1, r.v0);
 
-            const tiles = faceTilesFor.get(t) || faceTilesFor.get(B.DIRT);
+      // two triangles
+      buf.idx.push(base, base+1, base+2,  base+2, base+1, base+3);
 
-            // Neighbor offsets in the same face order as the tile array:
-            // 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z
-            const n0 = getLocal(lx+1,lz,y);
-            const n1 = getLocal(lx-1,lz,y);
-            const n2 = getLocal(lx,lz,y+1);
-            const n3 = getLocal(lx,lz,y-1);
-            const n4 = getLocal(lx,lz+1,y);
-            const n5 = getLocal(lx,lz-1,y);
+      buf.v += 4;
+    }
 
-            if (transFaceVisible(t, n0)) pushFace(buf, wx, y, wz, 0, tiles[0]);
-            if (transFaceVisible(t, n1)) pushFace(buf, wx, y, wz, 1, tiles[1]);
-            if (transFaceVisible(t, n2)) pushFace(buf, wx, y, wz, 2, tiles[2]);
-            if (transFaceVisible(t, n3)) pushFace(buf, wx, y, wz, 3, tiles[3]);
-            if (transFaceVisible(t, n4)) pushFace(buf, wx, y, wz, 4, tiles[4]);
-            if (transFaceVisible(t, n5)) pushFace(buf, wx, y, wz, 5, tiles[5]);
-
-            continue;
-          }
-
-          // Opaque blocks: keep the existing "exposed block" test and instancing.
-          const exposed =
-            !occludesFace(t, getLocal(lx+1,lz,y)) || !occludesFace(t, getLocal(lx-1,lz,y)) ||
-            !occludesFace(t, getLocal(lx,lz,y+1)) || !occludesFace(t, getLocal(lx,lz,y-1)) ||
-            !occludesFace(t, getLocal(lx,lz+1,y)) || !occludesFace(t, getLocal(lx,lz-1,y));
-
-          if (!exposed) continue;
-
-          if (!positions.has(t)) positions.set(t, []);
-          positions.get(t).push({x: wx, y, z: wz});
-        }
-      }
-
+    function finalizeMeshes(positions, tbuf) {
       const meshes = [];
       const mtx = new THREE.Matrix4();
 
@@ -4511,22 +4407,207 @@ function getChunkData(cx, cz) {
       return meshes;
     }
 
+    function createChunkJob(cx, cz, options = {}) {
+      const key = chunkKey(cx, cz);
+      const version = chunkEditVersion.get(key) || 0;
+      const wx0 = cx * CHUNK;
+      const wz0 = cz * CHUNK;
+      const cached = chunkDataCache.get(key);
+      const job = {
+        cx, cz, key,
+        version,
+        replaceExisting: options.replaceExisting || false,
+        phase: "sample",
+        done: false,
+        cancelled: false,
+        meshes: null,
+        sampleY: 0,
+        meshY: 0,
+      };
+
+      if (cached && cached.version === version) {
+        touchChunkCache(key, cached);
+        job.data = cached.data;
+        job.H = cached.H;
+        job.yMax = cached.yMax;
+        job.sampleY = cached.H;
+      } else {
+        const yMax = estimateChunkYMax(cx, cz);
+        const H = Math.min(WORLD_H, yMax + 3);
+        job.data = new Uint8Array(CHUNK * CHUNK * H);
+        job.H = H;
+        job.yMax = yMax;
+      }
+
+      job.idx = (lx, lz, y) => (y * CHUNK + lz) * CHUNK + lx;
+      job.positions = new Map();
+      job.tbuf = makeTransparentBuffers();
+
+      job.getLocal = (lx, lz, y) => {
+        if (y < 0) return B.AIR;
+        if (lx>=0 && lx<CHUNK && lz>=0 && lz<CHUNK && y>=0 && y<job.H) return job.data[job.idx(lx,lz,y)];
+        const wx = wx0 + lx;
+        const wz = wz0 + lz;
+        return getBlock(wx, y, wz);
+      };
+
+      job.step = (sampleSlices, meshSlices) => {
+        if (job.cancelled || job.done) return;
+
+        if (job.sampleY < job.H) {
+          const endY = Math.min(job.H, job.sampleY + sampleSlices);
+          for (let y=job.sampleY; y<endY; y++) {
+            for (let lz=0; lz<CHUNK; lz++) for (let lx=0; lx<CHUNK; lx++) {
+              const wx = wx0 + lx;
+              const wz = wz0 + lz;
+              job.data[job.idx(lx,lz,y)] = getBlock(wx, y, wz);
+            }
+          }
+          job.sampleY = endY;
+          if (job.sampleY >= job.H) {
+            const entry = { data: job.data, H: job.H, yMax: job.yMax, version: job.version };
+            touchChunkCache(job.key, entry);
+            job.phase = "mesh";
+          }
+          return;
+        }
+
+        if (job.meshY <= job.yMax) {
+          const endY = Math.min(job.yMax + 1, job.meshY + meshSlices);
+          for (let y=job.meshY; y<endY; y++) {
+            for (let lz=0; lz<CHUNK; lz++) for (let lx=0; lx<CHUNK; lx++) {
+              const wx = wx0 + lx;
+              const wz = wz0 + lz;
+              const t = job.getLocal(lx,lz,y);
+              if (!isSolid(t)) continue;
+
+              if (isTransparentBlock(t)) {
+                const buf = job.tbuf.get(t);
+                if (!buf) continue;
+
+                const tiles = faceTilesFor.get(t) || faceTilesFor.get(B.DIRT);
+                const n0 = job.getLocal(lx+1,lz,y);
+                const n1 = job.getLocal(lx-1,lz,y);
+                const n2 = job.getLocal(lx,lz,y+1);
+                const n3 = job.getLocal(lx,lz,y-1);
+                const n4 = job.getLocal(lx,lz+1,y);
+                const n5 = job.getLocal(lx,lz-1,y);
+
+                if (transFaceVisible(t, n0)) pushFace(buf, wx, y, wz, 0, tiles[0]);
+                if (transFaceVisible(t, n1)) pushFace(buf, wx, y, wz, 1, tiles[1]);
+                if (transFaceVisible(t, n2)) pushFace(buf, wx, y, wz, 2, tiles[2]);
+                if (transFaceVisible(t, n3)) pushFace(buf, wx, y, wz, 3, tiles[3]);
+                if (transFaceVisible(t, n4)) pushFace(buf, wx, y, wz, 4, tiles[4]);
+                if (transFaceVisible(t, n5)) pushFace(buf, wx, y, wz, 5, tiles[5]);
+                continue;
+              }
+
+              const exposed =
+                !occludesFace(t, job.getLocal(lx+1,lz,y)) || !occludesFace(t, job.getLocal(lx-1,lz,y)) ||
+                !occludesFace(t, job.getLocal(lx,lz,y+1)) || !occludesFace(t, job.getLocal(lx,lz,y-1)) ||
+                !occludesFace(t, job.getLocal(lx,lz+1,y)) || !occludesFace(t, job.getLocal(lx,lz-1,y));
+
+              if (!exposed) continue;
+
+              if (!job.positions.has(t)) job.positions.set(t, []);
+              job.positions.get(t).push({x: wx, y, z: wz});
+            }
+          }
+          job.meshY = endY;
+          if (job.meshY > job.yMax) {
+            job.meshes = finalizeMeshes(job.positions, job.tbuf);
+            job.done = true;
+          }
+        }
+      };
+
+      return job;
+    }
+
+    const CHUNK_SAMPLE_SLICES_PER_STEP = 4;
+    const CHUNK_MESH_SLICES_PER_STEP = 3;
+    const MAX_ACTIVE_CHUNK_JOBS = 2;
+    const MAX_CHUNK_JOB_STEPS_PER_FRAME = 3;
+    const pendingChunkQueue = [];
+    const pendingChunkSet = new Set();
+    const activeChunkJobs = new Map();
+    let desiredChunks = new Set();
+
+    function enqueueChunkJob(cx, cz, options = {}) {
+      const key = chunkKey(cx, cz);
+      if (chunks.has(key) || pendingChunkSet.has(key) || activeChunkJobs.has(key)) return;
+      const item = { cx, cz, key, replaceExisting: options.replaceExisting || false };
+      if (options.priority) pendingChunkQueue.unshift(item);
+      else pendingChunkQueue.push(item);
+      pendingChunkSet.add(key);
+    }
+
+    function cancelChunkJob(key) {
+      if (activeChunkJobs.has(key)) activeChunkJobs.delete(key);
+      if (pendingChunkSet.has(key)) {
+        pendingChunkSet.delete(key);
+        for (let i = pendingChunkQueue.length - 1; i >= 0; i--) {
+          if (pendingChunkQueue[i].key === key) pendingChunkQueue.splice(i, 1);
+        }
+      }
+    }
+
+    function processChunkJobs() {
+      while (activeChunkJobs.size < MAX_ACTIVE_CHUNK_JOBS && pendingChunkQueue.length) {
+        const item = pendingChunkQueue.shift();
+        pendingChunkSet.delete(item.key);
+        if (!desiredChunks.has(item.key) && !item.replaceExisting) continue;
+        const job = createChunkJob(item.cx, item.cz, { replaceExisting: item.replaceExisting });
+        activeChunkJobs.set(item.key, job);
+      }
+
+      let steps = 0;
+      for (const [key, job] of activeChunkJobs) {
+        if (steps >= MAX_CHUNK_JOB_STEPS_PER_FRAME) break;
+        if (!desiredChunks.has(key) && !job.replaceExisting) {
+          activeChunkJobs.delete(key);
+          continue;
+        }
+        if ((chunkEditVersion.get(key) || 0) !== job.version && !job.replaceExisting) {
+          activeChunkJobs.delete(key);
+          enqueueChunkJob(job.cx, job.cz, { priority: true });
+          continue;
+        }
+        job.step(CHUNK_SAMPLE_SLICES_PER_STEP, CHUNK_MESH_SLICES_PER_STEP);
+        steps++;
+        if (job.done) {
+          const currentVersion = chunkEditVersion.get(key) || 0;
+          if (currentVersion !== job.version && !job.replaceExisting) {
+            activeChunkJobs.delete(key);
+            enqueueChunkJob(job.cx, job.cz, { priority: true });
+            continue;
+          }
+          if (job.replaceExisting && chunks.has(key)) {
+            const existing = chunks.get(key);
+            disposeChunk(existing);
+            chunks.delete(key);
+          }
+          if (!chunks.has(key)) {
+            const chunk = { cx: job.cx, cz: job.cz, meshes: job.meshes || [] };
+            for (const m of chunk.meshes) scene.add(m);
+            chunks.set(key, chunk);
+          }
+          activeChunkJobs.delete(key);
+        }
+      }
+    }
+
     function loadChunk(cx, cz) {
       const key = chunkKey(cx, cz);
       if (chunks.has(key)) return;
-      const chunk = { cx, cz, meshes: [] };
-      chunk.meshes = buildChunkMeshes(cx, cz);
-      for (const m of chunk.meshes) scene.add(m);
-      chunks.set(key, chunk);
+      enqueueChunkJob(cx, cz);
     }
 
     function rebuildChunk(cx, cz) {
       const key = chunkKey(cx, cz);
       const chunk = chunks.get(key);
       if (!chunk) return;
-      disposeChunk(chunk);
-      chunk.meshes = buildChunkMeshes(cx, cz);
-      for (const m of chunk.meshes) scene.add(m);
+      enqueueChunkJob(cx, cz, { priority: true, replaceExisting: true });
     }
 
     function markChunksDirtyForBlock(wx, wz) {
@@ -4551,12 +4632,21 @@ function getChunkData(cx, cz) {
         want.add(chunkKey(pcx + dx, pcz + dz));
       }
 
+      desiredChunks = want;
+
       // unload
       for (const [key, chunk] of chunks.entries()) {
         if (!want.has(key)) {
           disposeChunk(chunk);
           chunks.delete(key);
         }
+      }
+
+      for (const key of pendingChunkSet) {
+        if (!want.has(key)) cancelChunkJob(key);
+      }
+      for (const key of activeChunkJobs.keys()) {
+        if (!want.has(key)) cancelChunkJob(key);
       }
 
       // load missing nearest-first (limited per frame)
@@ -4568,8 +4658,8 @@ function getChunkData(cx, cz) {
       }
       missing.sort((a,b) => a.d2 - b.d2);
 
-      for (let i=0; i<Math.min(MAX_LOADS_PER_FRAME, missing.length); i++) {
-        loadChunk(missing[i].cx, missing[i].cz);
+      for (let i=0; i<missing.length; i++) {
+        enqueueChunkJob(missing[i].cx, missing[i].cz);
       }
     }
 
@@ -5769,6 +5859,7 @@ if (inWater) {
 
 
 updateChunkStreaming(player.pos.x, player.pos.z);
+processChunkJobs();
 
 // Continuous mine/place while holding mouse buttons
 {
