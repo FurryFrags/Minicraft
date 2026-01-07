@@ -5670,15 +5670,28 @@ try { updateHeldBlock3D(); } catch(_) {}
       let sx = 0, sz = 0;
       if (!goodSpawn(sx, sz)) {
         let found = false;
-        const maxR = 192;
+        let best = null;
+        let bestTop = -Infinity;
+        const maxR = 256;
         for (let r = 4; r <= maxR && !found; r += 4) {
           for (let dz = -r; dz <= r && !found; dz += 4) {
             for (let dx = -r; dx <= r && !found; dx += 4) {
               const x = sx + dx, z = sz + dz;
               if (goodSpawn(x, z)) { sx = x; sz = z; found = true; }
+              if (!found) {
+                const top = surfaceY(x, z);
+                if (top > bestTop) {
+                  const t = getBlock(x, top, z);
+                  if (t !== B.LAVA && getBlock(x, top + 1, z) === B.AIR && getBlock(x, top + 2, z) === B.AIR) {
+                    bestTop = top;
+                    best = { x, z };
+                  }
+                }
+              }
             }
           }
         }
+        if (!found && best) { sx = best.x; sz = best.z; }
       }
 
       const top = surfaceY(sx, sz);
