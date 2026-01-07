@@ -1722,6 +1722,45 @@
       ctx.drawImage(img, sx, sy, sw, sh, dx, dy, TILE, TILE);
     }
 
+    function _drawImageOverTile(ctx, img, sx, sy, sw, sh, tileIdx) {
+      const tx = tileIdx % ATLAS_COLS;
+      const ty = Math.floor(tileIdx / ATLAS_COLS);
+      const dx = tx * TILE, dy = ty * TILE;
+      ctx.drawImage(img, sx, sy, sw, sh, dx, dy, TILE, TILE);
+    }
+
+    function _copyAtlasTileIntoTile(ctx, sourceTileIdx, destTileIdx) {
+      const srcX = (sourceTileIdx % ATLAS_COLS) * TILE;
+      const srcY = Math.floor(sourceTileIdx / ATLAS_COLS) * TILE;
+      const tx = destTileIdx % ATLAS_COLS;
+      const ty = Math.floor(destTileIdx / ATLAS_COLS);
+      const dx = tx * TILE, dy = ty * TILE;
+      const tmp = document.createElement("canvas");
+      tmp.width = TILE;
+      tmp.height = TILE;
+      const tmpCtx = tmp.getContext("2d");
+      tmpCtx.drawImage(atlasCanvas, srcX, srcY, TILE, TILE, 0, 0, TILE, TILE);
+      ctx.clearRect(dx, dy, TILE, TILE);
+      ctx.drawImage(tmp, 0, 0, TILE, TILE, dx, dy, TILE, TILE);
+    }
+
+    function _isMostlyTransparentBitmap(img) {
+      const size = Math.min(img.width || 16, img.height || 16);
+      const sample = document.createElement("canvas");
+      sample.width = size;
+      sample.height = size;
+      const sctx = sample.getContext("2d", { willReadFrequently: true });
+      sctx.clearRect(0, 0, size, size);
+      sctx.drawImage(img, 0, 0, size, size);
+      const data = sctx.getImageData(0, 0, size, size).data;
+      const total = size * size;
+      let opaque = 0;
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] > 16) opaque++;
+      }
+      return (opaque / total) < 0.5;
+    }
+
     function _setMissingTextures(missing, sourceLabel) {
       lastMissingTextures = missing.slice().sort();
       if (missing.length) {
@@ -1834,7 +1873,7 @@
         return Array.from(roots);
       })();
 
-      async function loadFirst(paths) {
+      async function loadFirstWithPath(paths) {
         for (const p of paths) {
           for (const root of packRoots) {
             const f = zip.file(`${root}${p}`);
@@ -1842,11 +1881,16 @@
             try {
               const blob = await f.async("blob");
               const img = await _blobToBitmap(blob);
-              return img;
+              return { img, path: p };
             } catch (_) {}
           }
         }
         return null;
+      }
+
+      async function loadFirst(paths) {
+        const found = await loadFirstWithPath(paths);
+        return found ? found.img : null;
       }
 
       const tex = {
@@ -2107,9 +2151,50 @@
         ],
       };
 
+      const overlayConfig = {
+        grass_side: {
+          overlayHints: ["grass_block_side_overlay.png"],
+          basePaths: [
+            "assets/minecraft/textures/block/grass_block_side.png",
+            "assets/minecraft/textures/blocks/grass_side.png",
+          ],
+          fallbackTile: "dirt",
+        },
+      };
+
       const missing = [];
       for (const [ourName, paths] of Object.entries(tex)) {
         if (T[ourName] == null) continue;
+        const overlayEntry = overlayConfig[ourName];
+        if (overlayEntry) {
+          const found = await loadFirstWithPath(paths);
+          if (!found) {
+            missing.push(ourName);
+            continue;
+          }
+          const { img, path } = found;
+          const s = Math.min(img.width || 16, img.height || 16);
+          const overlayHinted = overlayEntry.overlayHints.some((hint) => path.includes(hint));
+          const treatAsOverlay = overlayHinted || _isMostlyTransparentBitmap(img);
+          if (treatAsOverlay) {
+            const baseImg = await loadFirst(overlayEntry.basePaths);
+            const dirtImg = await loadFirst(tex.dirt);
+            if (baseImg) {
+              const baseSize = Math.min(baseImg.width || 16, baseImg.height || 16);
+              _drawImageIntoTile(ctx, baseImg, 0, 0, baseSize, baseSize, T[ourName]);
+            } else if (dirtImg) {
+              const dirtSize = Math.min(dirtImg.width || 16, dirtImg.height || 16);
+              _drawImageIntoTile(ctx, dirtImg, 0, 0, dirtSize, dirtSize, T[ourName]);
+            } else if (T[overlayEntry.fallbackTile] != null) {
+              _copyAtlasTileIntoTile(ctx, T[overlayEntry.fallbackTile], T[ourName]);
+            }
+            _drawImageOverTile(ctx, img, 0, 0, s, s, T[ourName]);
+          } else {
+            _drawImageIntoTile(ctx, img, 0, 0, s, s, T[ourName]);
+          }
+          continue;
+        }
+
         const img = await loadFirst(paths);
         if (!img) {
           missing.push(ourName);
