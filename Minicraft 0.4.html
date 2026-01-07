@@ -3971,7 +3971,8 @@ function getColumn(x, z) {
   top = Math.max(1, Math.min(WORLD_H - 5, top));
 
   // Mirrored underground: mirror heightmap around sea level and carve a cavity.
-  const mirrorBase = clamp(SEA_LEVEL * 2 - top, 4, SEA_LEVEL - 4);
+  const mirrorMax = Math.max(SEA_LEVEL - 4, 4);
+  const mirrorBase = clamp(SEA_LEVEL * 2 - top, 4, mirrorMax);
   const caveDepth = 3 + (hash2i(x * 3, z * 5) & 3);
   const mirrorCeil = mirrorBase;
   const mirrorFloor = Math.max(2, mirrorBase - caveDepth);
