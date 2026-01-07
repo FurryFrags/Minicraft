@@ -3773,10 +3773,11 @@ function smoothstep(edge0, edge1, x) {
       SWAMP: 6,
       MOUNTAIN: 7,
     };
-    const BIOME_CONTINENT_SCALE = 520;
-    const BIOME_TEMP_SCALE = 720;
-    const BIOME_MOIST_SCALE = 720;
-    const BIOME_RUGGED_SCALE = 320;
+    const BIOME_CONTINENT_SCALE = 1400;
+    const BIOME_TEMP_SCALE = 1900;
+    const BIOME_MOIST_SCALE = 1900;
+    const BIOME_RUGGED_SCALE = 900;
+    const BIOME_WARP_SCALE = 2400;
 
     function valueNoise2D(x, z, scale) {
       const fx = x / scale;
@@ -3819,20 +3820,25 @@ function smoothstep(edge0, edge1, x) {
     }
 
     function biomeAt(x, z) {
-      const continent = fbmNoise2D(x - 12000, z + 9000, BIOME_CONTINENT_SCALE, 4, 2.1, 0.55);
-      const islandMask = smoothstep(0.36, 0.62, continent);
-      const temp = fbmNoise2D(x + 21000, z - 15000, BIOME_TEMP_SCALE, 4, 2.0, 0.5);
-      const moist = fbmNoise2D(x - 8000, z + 17000, BIOME_MOIST_SCALE, 4, 2.0, 0.5);
-      const rugged = fbmNoise2D(x + 4000, z + 4000, BIOME_RUGGED_SCALE, 3, 2.1, 0.5);
+      const warpX = (fbmNoise2D(x - 31000, z + 12000, BIOME_WARP_SCALE, 3, 2.0, 0.55) - 0.5) * 720;
+      const warpZ = (fbmNoise2D(x + 18000, z - 26000, BIOME_WARP_SCALE, 3, 2.0, 0.55) - 0.5) * 720;
+      const warpedX = x + warpX;
+      const warpedZ = z + warpZ;
+
+      const continent = fbmNoise2D(warpedX - 12000, warpedZ + 9000, BIOME_CONTINENT_SCALE, 4, 2.1, 0.55);
+      const islandMask = smoothstep(0.40, 0.66, continent);
+      const temp = fbmNoise2D(warpedX + 21000, warpedZ - 15000, BIOME_TEMP_SCALE, 5, 2.0, 0.52);
+      const moist = fbmNoise2D(warpedX - 8000, warpedZ + 17000, BIOME_MOIST_SCALE, 5, 2.0, 0.52);
+      const rugged = fbmNoise2D(warpedX + 4000, warpedZ + 4000, BIOME_RUGGED_SCALE, 4, 2.05, 0.5);
 
       const weights = new Map();
-      weights.set(BIOME.DESERT, biomeWeight(temp, moist, 0.88, 0.18, 0.33));
-      weights.set(BIOME.SWAMP, biomeWeight(temp, moist, 0.68, 0.88, 0.35));
-      weights.set(BIOME.FOREST, biomeWeight(temp, moist, 0.60, 0.68, 0.35));
-      weights.set(BIOME.PLAINS, biomeWeight(temp, moist, 0.55, 0.45, 0.38));
-      weights.set(BIOME.TAIGA, biomeWeight(temp, moist, 0.30, 0.55, 0.34));
-      weights.set(BIOME.SNOWY, biomeWeight(temp, moist, 0.18, 0.40, 0.30));
-      weights.set(BIOME.MOUNTAIN, biomeWeight(temp, moist, 0.45, 0.50, 0.42) * smoothstep(0.55, 0.85, rugged));
+      weights.set(BIOME.DESERT, biomeWeight(temp, moist, 0.86, 0.22, 0.44));
+      weights.set(BIOME.SWAMP, biomeWeight(temp, moist, 0.70, 0.86, 0.42));
+      weights.set(BIOME.FOREST, biomeWeight(temp, moist, 0.58, 0.68, 0.44));
+      weights.set(BIOME.PLAINS, biomeWeight(temp, moist, 0.55, 0.48, 0.48));
+      weights.set(BIOME.TAIGA, biomeWeight(temp, moist, 0.32, 0.58, 0.42));
+      weights.set(BIOME.SNOWY, biomeWeight(temp, moist, 0.18, 0.38, 0.36));
+      weights.set(BIOME.MOUNTAIN, biomeWeight(temp, moist, 0.48, 0.52, 0.50) * smoothstep(0.50, 0.82, rugged));
 
       let landSum = 0;
       for (const [biome, w] of weights) {
