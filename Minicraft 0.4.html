@@ -3773,35 +3773,110 @@ function smoothstep(edge0, edge1, x) {
       SWAMP: 6,
       MOUNTAIN: 7,
     };
-    const BIOME_GRID = 96;
-    const BIOME_RADIUS = BIOME_GRID * 0.62;
-    const BIOME_PATTERN_SIZE = 4;
-    const BIOME_PATTERN = (() => {
-      const land = [BIOME.PLAINS, BIOME.FOREST, BIOME.DESERT, BIOME.TAIGA, BIOME.SNOWY, BIOME.SWAMP, BIOME.MOUNTAIN];
-      const rng = seededRng(WORLD_SEED ^ 0xa5a5a5a5);
-      const out = [];
-      for (let i = 0; i < BIOME_PATTERN_SIZE * BIOME_PATTERN_SIZE; i++) {
-        out.push(land[Math.floor(rngFloat(rng) * land.length)]);
-      }
-      return out;
-    })();
+    const BIOME_CONTINENT_SCALE = 520;
+    const BIOME_TEMP_SCALE = 720;
+    const BIOME_MOIST_SCALE = 720;
+    const BIOME_RUGGED_SCALE = 320;
 
-    function biomeForCell(gx, gz) {
-      const ix = mod(gx, BIOME_PATTERN_SIZE);
-      const iz = mod(gz, BIOME_PATTERN_SIZE);
-      return BIOME_PATTERN[iz * BIOME_PATTERN_SIZE + ix];
+    function valueNoise2D(x, z, scale) {
+      const fx = x / scale;
+      const fz = z / scale;
+      const x0 = Math.floor(fx);
+      const z0 = Math.floor(fz);
+      const x1 = x0 + 1;
+      const z1 = z0 + 1;
+      const tx = fx - x0;
+      const tz = fz - z0;
+      const sx = tx * tx * (3 - 2 * tx);
+      const sz = tz * tz * (3 - 2 * tz);
+      const v00 = hash2f(x0, z0);
+      const v10 = hash2f(x1, z0);
+      const v01 = hash2f(x0, z1);
+      const v11 = hash2f(x1, z1);
+      return bilerp(v00, v10, v01, v11, sx, sz);
+    }
+
+    function fbmNoise2D(x, z, scale, octaves, lacunarity, gain) {
+      let freq = 1;
+      let amp = 1;
+      let sum = 0;
+      let ampSum = 0;
+      for (let i = 0; i < octaves; i++) {
+        const n = valueNoise2D(x * freq, z * freq, scale) * 2 - 1;
+        sum += n * amp;
+        ampSum += amp;
+        amp *= gain;
+        freq *= lacunarity;
+      }
+      return sum / ampSum * 0.5 + 0.5;
+    }
+
+    function biomeWeight(temp, moist, targetT, targetM, radius) {
+      const dt = temp - targetT;
+      const dm = moist - targetM;
+      const dist = Math.sqrt(dt * dt + dm * dm);
+      return clamp01(1 - dist / radius);
     }
 
     function biomeAt(x, z) {
-      const gx = floorDiv(x, BIOME_GRID);
-      const gz = floorDiv(z, BIOME_GRID);
-      const centerX = gx * BIOME_GRID + BIOME_GRID * 0.5;
-      const centerZ = gz * BIOME_GRID + BIOME_GRID * 0.5;
-      const dx = x - centerX;
-      const dz = z - centerZ;
-      const dist = Math.sqrt(dx * dx + dz * dz);
-      const islandFalloff = smoothstep(BIOME_RADIUS * 0.85, BIOME_RADIUS * 1.1, dist);
-      return { biome: biomeForCell(gx, gz), islandMask: 1 - islandFalloff };
+      const continent = fbmNoise2D(x - 12000, z + 9000, BIOME_CONTINENT_SCALE, 4, 2.1, 0.55);
+      const islandMask = smoothstep(0.36, 0.62, continent);
+      const temp = fbmNoise2D(x + 21000, z - 15000, BIOME_TEMP_SCALE, 4, 2.0, 0.5);
+      const moist = fbmNoise2D(x - 8000, z + 17000, BIOME_MOIST_SCALE, 4, 2.0, 0.5);
+      const rugged = fbmNoise2D(x + 4000, z + 4000, BIOME_RUGGED_SCALE, 3, 2.1, 0.5);
+
+      const weights = new Map();
+      weights.set(BIOME.DESERT, biomeWeight(temp, moist, 0.88, 0.18, 0.33));
+      weights.set(BIOME.SWAMP, biomeWeight(temp, moist, 0.68, 0.88, 0.35));
+      weights.set(BIOME.FOREST, biomeWeight(temp, moist, 0.60, 0.68, 0.35));
+      weights.set(BIOME.PLAINS, biomeWeight(temp, moist, 0.55, 0.45, 0.38));
+      weights.set(BIOME.TAIGA, biomeWeight(temp, moist, 0.30, 0.55, 0.34));
+      weights.set(BIOME.SNOWY, biomeWeight(temp, moist, 0.18, 0.40, 0.30));
+      weights.set(BIOME.MOUNTAIN, biomeWeight(temp, moist, 0.45, 0.50, 0.42) * smoothstep(0.55, 0.85, rugged));
+
+      let landSum = 0;
+      for (const [biome, w] of weights) {
+        const landW = w * islandMask;
+        weights.set(biome, landW);
+        landSum += landW;
+      }
+      const oceanWeight = clamp01(1 - islandMask);
+
+      let maxBiome = BIOME.OCEAN;
+      let maxWeight = oceanWeight;
+      let total = oceanWeight + landSum;
+      if (total <= 0) total = 1;
+      if (oceanWeight > 0) weights.set(BIOME.OCEAN, oceanWeight);
+      for (const [biome, w] of weights) {
+        if (w > maxWeight) {
+          maxWeight = w;
+          maxBiome = biome;
+        }
+      }
+      for (const [biome, w] of weights) {
+        weights.set(biome, w / total);
+      }
+
+      return { biome: maxBiome, islandMask, weights };
+    }
+
+    function blendedBiomeParams(info) {
+      let base = 0;
+      let amp = 0;
+      let jagAmp = 0;
+      let jagBits = 0;
+      for (const [biome, weight] of info.weights) {
+        base += biomeBaseHeight(biome) * weight;
+        amp += biomeHeightAmp(biome) * weight;
+        jagAmp += biomeJaggedAmp(biome) * weight;
+        jagBits += biomeJaggedBits(biome) * weight;
+      }
+      return {
+        base,
+        amp,
+        jagAmp,
+        jagBits: Math.max(1, Math.round(jagBits)),
+      };
     }
 
     function biomeJaggedBits(biome) {
@@ -3860,11 +3935,12 @@ function smoothstep(edge0, edge1, x) {
       const info = biomeAt(wx, wz);
       const biome = info.biome;
       const islandMask = info.islandMask;
+      const params = blendedBiomeParams(info);
       const rng = seededRng(hash2i(wx, wz));
-      const base = SEA_LEVEL + biomeBaseHeight(biome);
-      const amp = biomeHeightAmp(biome);
-      const jagBits = biomeJaggedBits(biome);
-      const jag = jaggedFromSeed(hash2i(wx + 11, wz - 7), jagBits) * biomeJaggedAmp(biome);
+      const base = SEA_LEVEL + params.base;
+      const amp = params.amp;
+      const jagBits = params.jagBits;
+      const jag = jaggedFromSeed(hash2i(wx + 11, wz - 7), jagBits) * params.jagAmp;
       const height = base + rngSigned(rng) * amp + jag;
       const oceanBase = SEA_LEVEL - 4 + rngSigned(rng) * 2;
       if (biome === BIOME.OCEAN) return Math.floor(lerp(oceanBase, height, islandMask));
@@ -3913,8 +3989,8 @@ function getColumn(x, z) {
 
   const info = biomeAt(x, z);
   const biome = info.biome;
-  const jagBits = biomeJaggedBits(biome);
-  const localJag = jaggedNoise2D(x, z, 8, jagBits) * biomeJaggedAmp(biome);
+  const params = blendedBiomeParams(info);
+  const localJag = jaggedNoise2D(x, z, 8, params.jagBits) * params.jagAmp;
   let top = Math.floor(bilerp(h00, h10, h01, h11, tx, tz) + localJag);
   top = Math.max(1, Math.min(WORLD_H - 5, top));
 
@@ -3928,20 +4004,35 @@ function getColumn(x, z) {
   let cactus = null;
   if (top >= SEA_LEVEL + 1 && top <= WORLD_H - 10) {
     const r = hash2f(x * 3, z * 3);
-    if (biome === BIOME.DESERT) {
-      if (r < 0.012) {
+    const desertWeight = info.weights.get(BIOME.DESERT) || 0;
+    const forestWeight = info.weights.get(BIOME.FOREST) || 0;
+    const plainsWeight = info.weights.get(BIOME.PLAINS) || 0;
+    const taigaWeight = info.weights.get(BIOME.TAIGA) || 0;
+    const snowyWeight = info.weights.get(BIOME.SNOWY) || 0;
+    const swampWeight = info.weights.get(BIOME.SWAMP) || 0;
+    const mountainWeight = info.weights.get(BIOME.MOUNTAIN) || 0;
+    const landFactor = clamp01(info.islandMask);
+    if (desertWeight > 0) {
+      const cactusChance = 0.024 * desertWeight * landFactor;
+      if (r < cactusChance) {
         const height = 2 + Math.floor(hash2f(x + 17, z - 9) * 3); // 2..4
         cactus = { top, height };
       }
-    } else if (biome !== BIOME.OCEAN && biome !== BIOME.MOUNTAIN) {
-      let p = 0.002;
+    }
+    if (biome !== BIOME.OCEAN) {
+      let p = 0.0015;
+      p += forestWeight * 0.022;
+      p += taigaWeight * 0.018;
+      p += snowyWeight * 0.012;
+      p += swampWeight * 0.020;
+      p += plainsWeight * 0.005;
+      p *= landFactor * (1 - mountainWeight * 0.65);
+      const oakWeight = forestWeight + plainsWeight * 0.6;
+      const pineWeight = taigaWeight + snowyWeight * 0.7;
+      const swampTreeWeight = swampWeight * 0.9;
       let type = "oak";
-      if (biome === BIOME.FOREST) { p = 0.020; type = "oak"; }
-      else if (biome === BIOME.TAIGA) { p = 0.016; type = "pine"; }
-      else if (biome === BIOME.SNOWY) { p = 0.010; type = "pine"; }
-      else if (biome === BIOME.SWAMP) { p = 0.018; type = "swamp"; }
-      else if (biome === BIOME.PLAINS) { p = 0.004; type = "oak"; }
-
+      if (pineWeight >= oakWeight && pineWeight >= swampTreeWeight) type = "pine";
+      else if (swampTreeWeight >= oakWeight) type = "swamp";
       if (r < p) {
         let trunkH = 4 + Math.floor(hash2f(x - 11, z + 7) * 4); // 4..7
         if (type === "pine") trunkH = 6 + Math.floor(hash2f(x + 13, z + 5) * 5); // 6..10
