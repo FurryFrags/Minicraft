@@ -515,9 +515,28 @@
       outline: none;
       font-size: 12px;
     }
+    #texPackRow select {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.22);
+      background: rgba(0,0,0,.35);
+      color: #fff;
+      outline: none;
+      font-size: 12px;
+    }
     #texPackRow .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
     #texPackApply { padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.08); color: #fff; cursor: pointer; }
     #texPackApply:hover { background: rgba(255,255,255,.12); }
+    #texPackMissing {
+      padding: 6px 8px;
+      border-radius: 8px;
+      border: 1px dashed rgba(255,255,255,.22);
+      background: rgba(255,255,255,.06);
+      font-size: 11px;
+      color: rgba(255,255,255,.86);
+      display: none;
+    }
 
     code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   </style>
@@ -532,11 +551,13 @@
       </div>
       <button id="play" class="btn" type="button">Play</button>
       <div id="texPackRow">
-        <div class="tiny"><b>Texture pack</b> (zip URL). Default is Kenney (CC0). Minecraft resource pack zips should also work (1.21+ paths).</div>
+        <div class="tiny"><b>Texture pack</b> preset or zip URL. Default is curated 1.21+ Minecraft assets; Kenney (CC0) remains as a low-bandwidth fallback.</div>
+        <select id="texPackPreset" aria-label="Texture pack preset"></select>
         <div class="row">
           <input id="texPackUrl" type="text" spellcheck="false" autocomplete="off" placeholder="Paste texture pack .zip URL (CORS-enabled)"/>
           <button id="texPackApply" type="button">Apply</button>
         </div>
+        <div id="texPackMissing" class="tiny" role="status" aria-live="polite"></div>
       </div>
 
       <div class="tiny">
@@ -1673,11 +1694,15 @@
     atlasTex.generateMipmaps = false;
     // ======================================================
     // Texture pack client (online zips)
-    // - Default: Kenney "Voxel Pack" (CC0)
+    // - Default: curated 1.21+ Minecraft assets pack
+    // - Kenney "Voxel Pack" (CC0) remains a low-bandwidth fallback
     // - Also supports Minecraft resource packs (expects assets/minecraft/textures/**)
     // ======================================================
-    const DEFAULT_TEXPACK_URL = "https://www.kenney.nl/media/pages/assets/voxel-pack/ee6f21f078-1677662501/kenney_voxel-pack.zip";
+    const CURATED_TEXPACK_URL = "https://github.com/PrismarineJS/minecraft-assets/archive/refs/heads/master.zip";
+    const KENNEY_TEXPACK_URL = "https://www.kenney.nl/media/pages/assets/voxel-pack/ee6f21f078-1677662501/kenney_voxel-pack.zip";
+    const DEFAULT_TEXPACK_URL = CURATED_TEXPACK_URL;
     let texturePackURL = localStorage.getItem("minicraft_texpack_url") || DEFAULT_TEXPACK_URL;
+    let lastMissingTextures = [];
 
     function _blobToBitmap(blob) {
       if (typeof createImageBitmap === "function") return createImageBitmap(blob);
@@ -1695,6 +1720,24 @@
       const dx = tx * TILE, dy = ty * TILE;
       ctx.clearRect(dx, dy, TILE, TILE);
       ctx.drawImage(img, sx, sy, sw, sh, dx, dy, TILE, TILE);
+    }
+
+    function _setMissingTextures(missing, sourceLabel) {
+      lastMissingTextures = missing.slice().sort();
+      if (missing.length) {
+        console.warn(`[texpack] Missing textures (${sourceLabel}):`, missing);
+      }
+      try {
+        const missingEl = document.getElementById("texPackMissing");
+        if (!missingEl) return;
+        if (!missing.length) {
+          missingEl.style.display = "none";
+          missingEl.textContent = "";
+          return;
+        }
+        missingEl.style.display = "block";
+        missingEl.textContent = `Missing textures (${sourceLabel}): ${missing.join(", ")}`;
+      } catch (_) {}
     }
 
     async function _applyKenneyVoxelPack(zip) {
@@ -1756,102 +1799,319 @@
         furnace_front: "greystone.png",
       };
 
+      const missing = [];
       for (const [ourName, kenName] of Object.entries(k)) {
         if (T[ourName] == null) continue;
         const r = map[kenName];
-        if (!r) continue;
+        if (!r) {
+          missing.push(ourName);
+          continue;
+        }
         _drawImageIntoTile(ctx, img, r.x, r.y, r.w, r.h, T[ourName]);
       }
+      _setMissingTextures(missing, "Kenney");
     }
 
     async function _applyMinecraftResourcePack(zip) {
       // Works with modern (1.13+) and many older packs; tries several fallback paths.
       const ctx = atlasCanvas.getContext("2d", { alpha: true });
+      const packRoots = (() => {
+        const roots = new Set();
+        for (const name of Object.keys(zip.files)) {
+          const idx = name.indexOf("assets/minecraft/textures/");
+          if (idx >= 0) roots.add(name.slice(0, idx));
+        }
+        if (!roots.size) roots.add("");
+        return Array.from(roots);
+      })();
 
       async function loadFirst(paths) {
         for (const p of paths) {
-          const f = zip.file(p);
-          if (!f) continue;
-          try {
-            const blob = await f.async("blob");
-            const img = await _blobToBitmap(blob);
-            return img;
-          } catch (_) {}
+          for (const root of packRoots) {
+            const f = zip.file(`${root}${p}`);
+            if (!f) continue;
+            try {
+              const blob = await f.async("blob");
+              const img = await _blobToBitmap(blob);
+              return img;
+            } catch (_) {}
+          }
         }
         return null;
       }
 
       const tex = {
-        grass_top: ["assets/minecraft/textures/block/grass_block_top.png","assets/minecraft/textures/blocks/grass_top.png","assets/minecraft/textures/blocks/grass.png"],
-        grass_side:["assets/minecraft/textures/block/grass_block_side.png","assets/minecraft/textures/blocks/grass_side.png"],
-        dirt:      ["assets/minecraft/textures/block/dirt.png","assets/minecraft/textures/blocks/dirt.png"],
-        cobble:    ["assets/minecraft/textures/block/cobblestone.png","assets/minecraft/textures/blocks/cobblestone.png"],
-        log_side:  ["assets/minecraft/textures/block/oak_log.png","assets/minecraft/textures/blocks/log_oak.png","assets/minecraft/textures/blocks/log.png"],
-        log_top:   ["assets/minecraft/textures/block/oak_log_top.png","assets/minecraft/textures/blocks/log_oak_top.png"],
-        planks:    ["assets/minecraft/textures/block/oak_planks.png","assets/minecraft/textures/blocks/planks_oak.png","assets/minecraft/textures/blocks/planks.png"],
-        leaves:    ["assets/minecraft/textures/block/oak_leaves.png","assets/minecraft/textures/blocks/leaves_oak.png","assets/minecraft/textures/blocks/leaves.png"],
-        sand:      ["assets/minecraft/textures/block/sand.png","assets/minecraft/textures/blocks/sand.png"],
-        glass:     ["assets/minecraft/textures/block/glass.png","assets/minecraft/textures/blocks/glass.png"],
-        bricks:    ["assets/minecraft/textures/block/bricks.png","assets/minecraft/textures/blocks/brick.png"],
-        obsidian:  ["assets/minecraft/textures/block/obsidian.png","assets/minecraft/textures/blocks/obsidian.png"],
-        gold:      ["assets/minecraft/textures/block/gold_block.png","assets/minecraft/textures/blocks/gold_block.png"],
-        diamond:   ["assets/minecraft/textures/block/diamond_block.png","assets/minecraft/textures/blocks/diamond_block.png"],
-        tnt_side:  ["assets/minecraft/textures/block/tnt_side.png","assets/minecraft/textures/blocks/tnt_side.png"],
-        tnt_top:   ["assets/minecraft/textures/block/tnt_top.png","assets/minecraft/textures/blocks/tnt_top.png"],
-        tnt_bottom:["assets/minecraft/textures/block/tnt_bottom.png","assets/minecraft/textures/blocks/tnt_bottom.png"],
-        wool_white:["assets/minecraft/textures/block/white_wool.png","assets/minecraft/textures/blocks/wool_colored_white.png"],
-        wool_red:  ["assets/minecraft/textures/block/red_wool.png","assets/minecraft/textures/blocks/wool_colored_red.png"],
-        wool_blue: ["assets/minecraft/textures/block/blue_wool.png","assets/minecraft/textures/blocks/wool_colored_blue.png"],
-        wool_green:["assets/minecraft/textures/block/green_wool.png","assets/minecraft/textures/blocks/wool_colored_green.png"],
-        water:     ["assets/minecraft/textures/block/water_still.png","assets/minecraft/textures/blocks/water_still.png","assets/minecraft/textures/block/water.png","assets/minecraft/textures/blocks/water.png"],
-        lava:      ["assets/minecraft/textures/block/lava_still.png","assets/minecraft/textures/blocks/lava_still.png","assets/minecraft/textures/block/lava.png","assets/minecraft/textures/blocks/lava.png"],
-        bedrock:   ["assets/minecraft/textures/block/bedrock.png","assets/minecraft/textures/blocks/bedrock.png"],
-        coal_ore:  ["assets/minecraft/textures/block/coal_ore.png","assets/minecraft/textures/blocks/coal_ore.png"],
-        iron_ore:  ["assets/minecraft/textures/block/iron_ore.png","assets/minecraft/textures/blocks/iron_ore.png"],
-        gold_ore:  ["assets/minecraft/textures/block/gold_ore.png","assets/minecraft/textures/blocks/gold_ore.png"],
-        diamond_ore:["assets/minecraft/textures/block/diamond_ore.png","assets/minecraft/textures/blocks/diamond_ore.png"],
+        grass_top: [
+          "assets/minecraft/textures/block/grass_block_top.png",
+          "assets/minecraft/textures/blocks/grass_top.png",
+          "assets/minecraft/textures/blocks/grass.png",
+        ],
+        grass_side:[
+          "assets/minecraft/textures/block/grass_block_side.png",
+          "assets/minecraft/textures/block/grass_block_side_overlay.png",
+          "assets/minecraft/textures/blocks/grass_side.png",
+        ],
+        dirt:      [
+          "assets/minecraft/textures/block/dirt.png",
+          "assets/minecraft/textures/blocks/dirt.png",
+        ],
+        cobble:    [
+          "assets/minecraft/textures/block/cobblestone.png",
+          "assets/minecraft/textures/block/cobble.png",
+          "assets/minecraft/textures/blocks/cobblestone.png",
+        ],
+        log_side:  [
+          "assets/minecraft/textures/block/oak_log.png",
+          "assets/minecraft/textures/block/oak_log_side.png",
+          "assets/minecraft/textures/blocks/log_oak.png",
+          "assets/minecraft/textures/blocks/log.png",
+        ],
+        log_top:   [
+          "assets/minecraft/textures/block/oak_log_top.png",
+          "assets/minecraft/textures/blocks/log_oak_top.png",
+          "assets/minecraft/textures/blocks/log_top.png",
+        ],
+        planks:    [
+          "assets/minecraft/textures/block/oak_planks.png",
+          "assets/minecraft/textures/block/planks_oak.png",
+          "assets/minecraft/textures/blocks/planks_oak.png",
+          "assets/minecraft/textures/blocks/planks.png",
+        ],
+        leaves:    [
+          "assets/minecraft/textures/block/oak_leaves.png",
+          "assets/minecraft/textures/block/oak_leaves_opaque.png",
+          "assets/minecraft/textures/blocks/leaves_oak.png",
+          "assets/minecraft/textures/blocks/leaves.png",
+        ],
+        sand:      [
+          "assets/minecraft/textures/block/sand.png",
+          "assets/minecraft/textures/blocks/sand.png",
+        ],
+        glass:     [
+          "assets/minecraft/textures/block/glass.png",
+          "assets/minecraft/textures/block/glass_clear.png",
+          "assets/minecraft/textures/blocks/glass.png",
+        ],
+        bricks:    [
+          "assets/minecraft/textures/block/bricks.png",
+          "assets/minecraft/textures/block/brick.png",
+          "assets/minecraft/textures/blocks/brick.png",
+        ],
+        obsidian:  [
+          "assets/minecraft/textures/block/obsidian.png",
+          "assets/minecraft/textures/blocks/obsidian.png",
+        ],
+        gold:      [
+          "assets/minecraft/textures/block/gold_block.png",
+          "assets/minecraft/textures/block/block_of_gold.png",
+          "assets/minecraft/textures/blocks/gold_block.png",
+        ],
+        diamond:   [
+          "assets/minecraft/textures/block/diamond_block.png",
+          "assets/minecraft/textures/block/block_of_diamond.png",
+          "assets/minecraft/textures/blocks/diamond_block.png",
+        ],
+        tnt_side:  [
+          "assets/minecraft/textures/block/tnt_side.png",
+          "assets/minecraft/textures/blocks/tnt_side.png",
+        ],
+        tnt_top:   [
+          "assets/minecraft/textures/block/tnt_top.png",
+          "assets/minecraft/textures/blocks/tnt_top.png",
+        ],
+        tnt_bottom:[
+          "assets/minecraft/textures/block/tnt_bottom.png",
+          "assets/minecraft/textures/blocks/tnt_bottom.png",
+        ],
+        wool_white:[
+          "assets/minecraft/textures/block/white_wool.png",
+          "assets/minecraft/textures/block/wool_white.png",
+          "assets/minecraft/textures/blocks/wool_colored_white.png",
+        ],
+        wool_red:  [
+          "assets/minecraft/textures/block/red_wool.png",
+          "assets/minecraft/textures/block/wool_red.png",
+          "assets/minecraft/textures/blocks/wool_colored_red.png",
+        ],
+        wool_blue: [
+          "assets/minecraft/textures/block/blue_wool.png",
+          "assets/minecraft/textures/block/wool_blue.png",
+          "assets/minecraft/textures/blocks/wool_colored_blue.png",
+        ],
+        wool_green:[
+          "assets/minecraft/textures/block/green_wool.png",
+          "assets/minecraft/textures/block/wool_green.png",
+          "assets/minecraft/textures/blocks/wool_colored_green.png",
+        ],
+        water:     [
+          "assets/minecraft/textures/block/water_still.png",
+          "assets/minecraft/textures/block/water_flow.png",
+          "assets/minecraft/textures/blocks/water_still.png",
+          "assets/minecraft/textures/block/water.png",
+          "assets/minecraft/textures/blocks/water.png",
+        ],
+        lava:      [
+          "assets/minecraft/textures/block/lava_still.png",
+          "assets/minecraft/textures/block/lava_flow.png",
+          "assets/minecraft/textures/blocks/lava_still.png",
+          "assets/minecraft/textures/block/lava.png",
+          "assets/minecraft/textures/blocks/lava.png",
+        ],
+        bedrock:   [
+          "assets/minecraft/textures/block/bedrock.png",
+          "assets/minecraft/textures/blocks/bedrock.png",
+        ],
+        coal_ore:  [
+          "assets/minecraft/textures/block/coal_ore.png",
+          "assets/minecraft/textures/block/deepslate_coal_ore.png",
+          "assets/minecraft/textures/blocks/coal_ore.png",
+        ],
+        iron_ore:  [
+          "assets/minecraft/textures/block/iron_ore.png",
+          "assets/minecraft/textures/block/deepslate_iron_ore.png",
+          "assets/minecraft/textures/blocks/iron_ore.png",
+        ],
+        gold_ore:  [
+          "assets/minecraft/textures/block/gold_ore.png",
+          "assets/minecraft/textures/block/deepslate_gold_ore.png",
+          "assets/minecraft/textures/blocks/gold_ore.png",
+        ],
+        diamond_ore:[
+          "assets/minecraft/textures/block/diamond_ore.png",
+          "assets/minecraft/textures/block/deepslate_diamond_ore.png",
+          "assets/minecraft/textures/blocks/diamond_ore.png",
+        ],
 
-        crafting_table_top: ["assets/minecraft/textures/block/crafting_table_top.png","assets/minecraft/textures/blocks/crafting_table_top.png"],
-        crafting_table_side:["assets/minecraft/textures/block/crafting_table_side.png","assets/minecraft/textures/blocks/crafting_table_side.png"],
-        crafting_table_front:["assets/minecraft/textures/block/crafting_table_front.png","assets/minecraft/textures/blocks/crafting_table_front.png"],
-        furnace_top: ["assets/minecraft/textures/block/furnace_top.png","assets/minecraft/textures/blocks/furnace_top.png"],
-        furnace_side:["assets/minecraft/textures/block/furnace_side.png","assets/minecraft/textures/blocks/furnace_side.png"],
-        furnace_front:["assets/minecraft/textures/block/furnace_front.png","assets/minecraft/textures/blocks/furnace_front.png"],
+        crafting_table_top: [
+          "assets/minecraft/textures/block/crafting_table_top.png",
+          "assets/minecraft/textures/blocks/crafting_table_top.png",
+        ],
+        crafting_table_side:[
+          "assets/minecraft/textures/block/crafting_table_side.png",
+          "assets/minecraft/textures/blocks/crafting_table_side.png",
+        ],
+        crafting_table_front:[
+          "assets/minecraft/textures/block/crafting_table_front.png",
+          "assets/minecraft/textures/blocks/crafting_table_front.png",
+        ],
+        furnace_top: [
+          "assets/minecraft/textures/block/furnace_top.png",
+          "assets/minecraft/textures/blocks/furnace_top.png",
+        ],
+        furnace_side:[
+          "assets/minecraft/textures/block/furnace_side.png",
+          "assets/minecraft/textures/blocks/furnace_side.png",
+        ],
+        furnace_front:[
+          "assets/minecraft/textures/block/furnace_front.png",
+          "assets/minecraft/textures/block/furnace_front_off.png",
+          "assets/minecraft/textures/blocks/furnace_front.png",
+        ],
 
-        wooden_sword: ["assets/minecraft/textures/item/wooden_sword.png","assets/minecraft/textures/items/wood_sword.png"],
-        wooden_pickaxe: ["assets/minecraft/textures/item/wooden_pickaxe.png","assets/minecraft/textures/items/wood_pickaxe.png"],
-        wooden_axe: ["assets/minecraft/textures/item/wooden_axe.png","assets/minecraft/textures/items/wood_axe.png"],
-        wooden_shovel: ["assets/minecraft/textures/item/wooden_shovel.png","assets/minecraft/textures/items/wood_shovel.png"],
-        wooden_hoe: ["assets/minecraft/textures/item/wooden_hoe.png","assets/minecraft/textures/items/wood_hoe.png"],
+        wooden_sword: [
+          "assets/minecraft/textures/item/wooden_sword.png",
+          "assets/minecraft/textures/item/wood_sword.png",
+          "assets/minecraft/textures/items/wood_sword.png",
+        ],
+        wooden_pickaxe: [
+          "assets/minecraft/textures/item/wooden_pickaxe.png",
+          "assets/minecraft/textures/item/wood_pickaxe.png",
+          "assets/minecraft/textures/items/wood_pickaxe.png",
+        ],
+        wooden_axe: [
+          "assets/minecraft/textures/item/wooden_axe.png",
+          "assets/minecraft/textures/item/wood_axe.png",
+          "assets/minecraft/textures/items/wood_axe.png",
+        ],
+        wooden_shovel: [
+          "assets/minecraft/textures/item/wooden_shovel.png",
+          "assets/minecraft/textures/item/wood_shovel.png",
+          "assets/minecraft/textures/items/wood_shovel.png",
+        ],
+        wooden_hoe: [
+          "assets/minecraft/textures/item/wooden_hoe.png",
+          "assets/minecraft/textures/item/wood_hoe.png",
+          "assets/minecraft/textures/items/wood_hoe.png",
+        ],
 
-        stone_sword: ["assets/minecraft/textures/item/stone_sword.png","assets/minecraft/textures/items/stone_sword.png"],
-        stone_pickaxe: ["assets/minecraft/textures/item/stone_pickaxe.png","assets/minecraft/textures/items/stone_pickaxe.png"],
-        stone_axe: ["assets/minecraft/textures/item/stone_axe.png","assets/minecraft/textures/items/stone_axe.png"],
-        stone_shovel: ["assets/minecraft/textures/item/stone_shovel.png","assets/minecraft/textures/items/stone_shovel.png"],
-        stone_hoe: ["assets/minecraft/textures/item/stone_hoe.png","assets/minecraft/textures/items/stone_hoe.png"],
+        stone_sword: [
+          "assets/minecraft/textures/item/stone_sword.png",
+          "assets/minecraft/textures/items/stone_sword.png",
+        ],
+        stone_pickaxe: [
+          "assets/minecraft/textures/item/stone_pickaxe.png",
+          "assets/minecraft/textures/items/stone_pickaxe.png",
+        ],
+        stone_axe: [
+          "assets/minecraft/textures/item/stone_axe.png",
+          "assets/minecraft/textures/items/stone_axe.png",
+        ],
+        stone_shovel: [
+          "assets/minecraft/textures/item/stone_shovel.png",
+          "assets/minecraft/textures/items/stone_shovel.png",
+        ],
+        stone_hoe: [
+          "assets/minecraft/textures/item/stone_hoe.png",
+          "assets/minecraft/textures/items/stone_hoe.png",
+        ],
 
-        iron_sword: ["assets/minecraft/textures/item/iron_sword.png","assets/minecraft/textures/items/iron_sword.png"],
-        iron_pickaxe: ["assets/minecraft/textures/item/iron_pickaxe.png","assets/minecraft/textures/items/iron_pickaxe.png"],
-        iron_axe: ["assets/minecraft/textures/item/iron_axe.png","assets/minecraft/textures/items/iron_axe.png"],
-        iron_shovel: ["assets/minecraft/textures/item/iron_shovel.png","assets/minecraft/textures/items/iron_shovel.png"],
-        iron_hoe: ["assets/minecraft/textures/item/iron_hoe.png","assets/minecraft/textures/items/iron_hoe.png"],
+        iron_sword: [
+          "assets/minecraft/textures/item/iron_sword.png",
+          "assets/minecraft/textures/items/iron_sword.png",
+        ],
+        iron_pickaxe: [
+          "assets/minecraft/textures/item/iron_pickaxe.png",
+          "assets/minecraft/textures/items/iron_pickaxe.png",
+        ],
+        iron_axe: [
+          "assets/minecraft/textures/item/iron_axe.png",
+          "assets/minecraft/textures/items/iron_axe.png",
+        ],
+        iron_shovel: [
+          "assets/minecraft/textures/item/iron_shovel.png",
+          "assets/minecraft/textures/items/iron_shovel.png",
+        ],
+        iron_hoe: [
+          "assets/minecraft/textures/item/iron_hoe.png",
+          "assets/minecraft/textures/items/iron_hoe.png",
+        ],
 
-        diamond_sword: ["assets/minecraft/textures/item/diamond_sword.png","assets/minecraft/textures/items/diamond_sword.png"],
-        diamond_pickaxe: ["assets/minecraft/textures/item/diamond_pickaxe.png","assets/minecraft/textures/items/diamond_pickaxe.png"],
-        diamond_axe: ["assets/minecraft/textures/item/diamond_axe.png","assets/minecraft/textures/items/diamond_axe.png"],
-        diamond_shovel: ["assets/minecraft/textures/item/diamond_shovel.png","assets/minecraft/textures/items/diamond_shovel.png"],
-        diamond_hoe: ["assets/minecraft/textures/item/diamond_hoe.png","assets/minecraft/textures/items/diamond_hoe.png"],
+        diamond_sword: [
+          "assets/minecraft/textures/item/diamond_sword.png",
+          "assets/minecraft/textures/items/diamond_sword.png",
+        ],
+        diamond_pickaxe: [
+          "assets/minecraft/textures/item/diamond_pickaxe.png",
+          "assets/minecraft/textures/items/diamond_pickaxe.png",
+        ],
+        diamond_axe: [
+          "assets/minecraft/textures/item/diamond_axe.png",
+          "assets/minecraft/textures/items/diamond_axe.png",
+        ],
+        diamond_shovel: [
+          "assets/minecraft/textures/item/diamond_shovel.png",
+          "assets/minecraft/textures/items/diamond_shovel.png",
+        ],
+        diamond_hoe: [
+          "assets/minecraft/textures/item/diamond_hoe.png",
+          "assets/minecraft/textures/items/diamond_hoe.png",
+        ],
       };
 
+      const missing = [];
       for (const [ourName, paths] of Object.entries(tex)) {
         if (T[ourName] == null) continue;
         const img = await loadFirst(paths);
-        if (!img) continue;
+        if (!img) {
+          missing.push(ourName);
+          continue;
+        }
 
         // whole image -> tile
         const s = Math.min(img.width || 16, img.height || 16);
         _drawImageIntoTile(ctx, img, 0, 0, s, s, T[ourName]);
       }
+      _setMissingTextures(missing, "Minecraft pack");
     }
 
     function _refreshAtlasUsersSoon() {
@@ -1898,6 +2158,7 @@
         _refreshAtlasUsersSoon();
         console.log("[texpack] Applied texture pack:", url);
       } catch (e) {
+        _setMissingTextures([], "none");
         console.warn("[texpack] Failed to load texture pack:", url, e);
       }
     }
@@ -1907,7 +2168,26 @@
     try {
       const texPackInputEl = document.getElementById("texPackUrl");
       const texPackApplyEl = document.getElementById("texPackApply");
+      const texPackPresetEl = document.getElementById("texPackPreset");
+      const presets = [
+        { label: "Minecraft 1.21+ (curated assets)", url: CURATED_TEXPACK_URL },
+        { label: "Kenney Voxel (low bandwidth)", url: KENNEY_TEXPACK_URL },
+        { label: "Custom URL…", url: "" },
+      ];
+      if (texPackPresetEl) {
+        texPackPresetEl.innerHTML = "";
+        for (const preset of presets) {
+          const opt = document.createElement("option");
+          opt.value = preset.url;
+          opt.textContent = preset.label;
+          texPackPresetEl.appendChild(opt);
+        }
+      }
       if (texPackInputEl) texPackInputEl.value = texturePackURL || "";
+      if (texPackPresetEl) {
+        const matched = presets.find((preset) => preset.url && preset.url === texturePackURL);
+        texPackPresetEl.value = matched ? matched.url : "";
+      }
       const applyFromUI = () => {
         const u = (texPackInputEl ? texPackInputEl.value : "").trim();
         if (!u) return;
@@ -1918,6 +2198,12 @@
       if (texPackApplyEl) texPackApplyEl.addEventListener("click", applyFromUI);
       if (texPackInputEl) texPackInputEl.addEventListener("keydown", (e) => {
         if (e.key === "Enter") { e.preventDefault(); applyFromUI(); }
+      });
+      if (texPackPresetEl) texPackPresetEl.addEventListener("change", () => {
+        const selected = texPackPresetEl.value;
+        if (!selected) return;
+        if (texPackInputEl) texPackInputEl.value = selected;
+        applyFromUI();
       });
     } catch(_) {}
 
