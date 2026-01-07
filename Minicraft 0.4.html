@@ -3760,7 +3760,7 @@ function smoothstep(edge0, edge1, x) {
         s ^= s << 5;
         sum += (s & 1) ? 1 : -1;
       }
-      return bits > 0 ? (sum / bits) : 0;
+      return bits > 0 ? (sum / bits) * 0.75 : 0;
     }
 
     // Column memo to avoid repeated column work while meshing.
@@ -3846,14 +3846,14 @@ function smoothstep(edge0, edge1, x) {
 
     function biomeJaggedAmp(biome) {
       switch (biome) {
-        case BIOME.MOUNTAIN: return 12;
-        case BIOME.SNOWY: return 10;
-        case BIOME.TAIGA: return 8;
-        case BIOME.FOREST: return 6;
-        case BIOME.SWAMP: return 4;
-        case BIOME.DESERT: return 5;
-        case BIOME.PLAINS: return 5;
-        default: return 3;
+        case BIOME.MOUNTAIN: return 9;
+        case BIOME.SNOWY: return 7;
+        case BIOME.TAIGA: return 6;
+        case BIOME.FOREST: return 4;
+        case BIOME.SWAMP: return 3;
+        case BIOME.DESERT: return 4;
+        case BIOME.PLAINS: return 4;
+        default: return 2;
       }
     }
 
@@ -3879,6 +3879,20 @@ function smoothstep(edge0, edge1, x) {
       return lerp(hx0, hx1, tz);
     }
 
+    function jaggedNoise2D(x, z, step, bits) {
+      const gx0 = floorDiv(x, step) * step;
+      const gz0 = floorDiv(z, step) * step;
+      const gx1 = gx0 + step;
+      const gz1 = gz0 + step;
+      const tx = (x - gx0) / step;
+      const tz = (z - gz0) / step;
+      const j00 = jaggedFromSeed(hash2i(gx0, gz0), bits);
+      const j10 = jaggedFromSeed(hash2i(gx1, gz0), bits);
+      const j01 = jaggedFromSeed(hash2i(gx0, gz1), bits);
+      const j11 = jaggedFromSeed(hash2i(gx1, gz1), bits);
+      return bilerp(j00, j10, j01, j11, tx, tz);
+    }
+
     const columnMemo = new Map(); // "x,z" -> {top, biome, tree, cactus, mirrorCeil, mirrorFloor, marker}
 
 function getColumn(x, z) {
@@ -3901,7 +3915,7 @@ function getColumn(x, z) {
   const info = biomeAt(x, z);
   const biome = info.biome;
   const jagBits = biomeJaggedBits(biome);
-  const localJag = jaggedFromSeed(hash2i(x, z), jagBits) * biomeJaggedAmp(biome);
+  const localJag = jaggedNoise2D(x, z, 8, jagBits) * biomeJaggedAmp(biome);
   let top = Math.floor(bilerp(h00, h10, h01, h11, tx, tz) + localJag);
   top = Math.max(1, Math.min(WORLD_H - 5, top));
 
