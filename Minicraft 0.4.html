@@ -3937,41 +3937,25 @@ function smoothstep(edge0, edge1, x) {
       }
     }
 
-    function cornerHeight(wx, wz) {
-      const info = biomeAt(wx, wz);
-      const biome = info.biome;
-      const islandMask = info.islandMask;
-      const params = blendedBiomeParams(info);
-      const rng = seededRng(hash2i(wx, wz));
-      const base = SEA_LEVEL + params.base;
-      const amp = params.amp;
-      const jagBits = params.jagBits;
-      const jag = jaggedFromSeed(hash2i(wx + 11, wz - 7), jagBits) * params.jagAmp;
-      const height = base + rngSigned(rng) * amp + jag;
-      const oceanBase = SEA_LEVEL - 4 + rngSigned(rng) * 2;
-      if (biome === BIOME.OCEAN) return Math.floor(lerp(oceanBase, height, islandMask));
-      const landMask = clamp(islandMask, 0.3, 1);
-      return Math.floor(lerp(oceanBase, height, landMask));
-    }
-
     function bilerp(h00, h10, h01, h11, tx, tz) {
       const hx0 = lerp(h00, h10, tx);
       const hx1 = lerp(h01, h11, tx);
       return lerp(hx0, hx1, tz);
     }
 
-    function jaggedNoise2D(x, z, step, bits) {
-      const gx0 = floorDiv(x, step) * step;
-      const gz0 = floorDiv(z, step) * step;
-      const gx1 = gx0 + step;
-      const gz1 = gz0 + step;
-      const tx = (x - gx0) / step;
-      const tz = (z - gz0) / step;
-      const j00 = jaggedFromSeed(hash2i(gx0, gz0), bits);
-      const j10 = jaggedFromSeed(hash2i(gx1, gz0), bits);
-      const j01 = jaggedFromSeed(hash2i(gx0, gz1), bits);
-      const j11 = jaggedFromSeed(hash2i(gx1, gz1), bits);
-      return bilerp(j00, j10, j01, j11, tx, tz);
+    function terrainHeight(x, z, info) {
+      const params = blendedBiomeParams(info);
+      const base = SEA_LEVEL + params.base;
+      const macro = fbmNoise2D(x - 14000, z + 12000, 420, 4, 2.05, 0.55) * 2 - 1;
+      const jagOctaves = Math.max(2, Math.min(6, params.jagBits));
+      const detail = fbmNoise2D(x + 5300, z - 9100, 110, jagOctaves, 2.15, 0.5) * 2 - 1;
+      const height = base + macro * params.amp + detail * params.jagAmp;
+      const oceanBase = SEA_LEVEL - 4
+        + (fbmNoise2D(x - 21000, z + 13000, 260, 3, 2.0, 0.55) * 2 - 1) * 2;
+      const oceanWeight = info.weights.get(BIOME.OCEAN) || 0;
+      const landMask = clamp(info.islandMask, 0.3, 1);
+      const landHeight = lerp(oceanBase, height, landMask);
+      return Math.floor(lerp(landHeight, oceanBase, oceanWeight));
     }
 
     const columnMemo = new Map(); // "x,z" -> {top, biome, tree, cactus, mirrorCeil, mirrorFloor, marker}
@@ -3981,23 +3965,9 @@ function getColumn(x, z) {
   let c = columnMemo.get(key);
   if (c) return c;
 
-  const cx = floorDiv(x, CHUNK);
-  const cz = floorDiv(z, CHUNK);
-  const wx0 = cx * CHUNK;
-  const wz0 = cz * CHUNK;
-  const tx = mod(x, CHUNK) / CHUNK;
-  const tz = mod(z, CHUNK) / CHUNK;
-
-  const h00 = cornerHeight(wx0, wz0);
-  const h10 = cornerHeight(wx0 + CHUNK, wz0);
-  const h01 = cornerHeight(wx0, wz0 + CHUNK);
-  const h11 = cornerHeight(wx0 + CHUNK, wz0 + CHUNK);
-
   const info = biomeAt(x, z);
   const biome = info.biome;
-  const params = blendedBiomeParams(info);
-  const localJag = jaggedNoise2D(x, z, 8, params.jagBits) * params.jagAmp;
-  let top = Math.floor(bilerp(h00, h10, h01, h11, tx, tz) + localJag);
+  let top = terrainHeight(x, z, info);
   top = Math.max(1, Math.min(WORLD_H - 5, top));
 
   // Mirrored underground: mirror heightmap around sea level and carve a cavity.
