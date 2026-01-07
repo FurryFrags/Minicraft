@@ -3774,8 +3774,8 @@ function smoothstep(edge0, edge1, x) {
       SWAMP: 6,
       MOUNTAIN: 7,
     };
-    const BIOME_GRID = 64;
-    const BIOME_RADIUS = BIOME_GRID * 0.42;
+    const BIOME_GRID = 96;
+    const BIOME_RADIUS = BIOME_GRID * 0.62;
     const BIOME_PATTERN_SIZE = 4;
     const BIOME_PATTERN = (() => {
       const land = [BIOME.PLAINS, BIOME.FOREST, BIOME.DESERT, BIOME.TAIGA, BIOME.SNOWY, BIOME.SWAMP, BIOME.MOUNTAIN];
@@ -3801,11 +3801,8 @@ function smoothstep(edge0, edge1, x) {
       const dx = x - centerX;
       const dz = z - centerZ;
       const dist = Math.sqrt(dx * dx + dz * dz);
-      const islandMask = smoothstep(BIOME_RADIUS * 0.6, BIOME_RADIUS, dist);
-      if (islandMask >= 1) {
-        return { biome: BIOME.OCEAN, islandMask: 0 };
-      }
-      return { biome: biomeForCell(gx, gz), islandMask: 1 - islandMask };
+      const islandFalloff = smoothstep(BIOME_RADIUS * 0.85, BIOME_RADIUS * 1.1, dist);
+      return { biome: biomeForCell(gx, gz), islandMask: 1 - islandFalloff };
     }
 
     function biomeJaggedBits(biome) {
@@ -3870,9 +3867,10 @@ function smoothstep(edge0, edge1, x) {
       const jagBits = biomeJaggedBits(biome);
       const jag = jaggedFromSeed(hash2i(wx + 11, wz - 7), jagBits) * biomeJaggedAmp(biome);
       const height = base + rngSigned(rng) * amp + jag;
-      if (biome === BIOME.OCEAN) return Math.floor(height);
-      const oceanBase = SEA_LEVEL - 12 + rngSigned(rng) * 3;
-      return Math.floor(lerp(oceanBase, height, islandMask));
+      const oceanBase = SEA_LEVEL - 4 + rngSigned(rng) * 2;
+      if (biome === BIOME.OCEAN) return Math.floor(lerp(oceanBase, height, islandMask));
+      const landMask = clamp(islandMask, 0.3, 1);
+      return Math.floor(lerp(oceanBase, height, landMask));
     }
 
     function bilerp(h00, h10, h01, h11, tx, tz) {
