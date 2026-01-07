@@ -354,6 +354,91 @@
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }
+    .craftingPanel,
+    .furnacePanel {
+      margin-bottom: 16px;
+      display: none;
+    }
+    .craftingPanel .panelTitle,
+    .furnacePanel .panelTitle {
+      font-size: 12px;
+      opacity: 0.85;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .craftingLayout {
+      display: grid;
+      grid-template-columns: auto 40px auto;
+      align-items: center;
+      gap: 12px;
+    }
+    .craftGrid {
+      display: grid;
+      grid-template-columns: repeat(3, 44px);
+      gap: 6px;
+    }
+    .craftArrow {
+      font-size: 20px;
+      opacity: 0.75;
+      text-align: center;
+    }
+    .recipeList {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .recipeRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      font-size: 12px;
+    }
+    .recipeRow.craftable {
+      border-color: rgba(120,220,120,.55);
+      background: rgba(120,220,120,.08);
+    }
+    .recipeRow .slot {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+    }
+    .furnaceLayout {
+      display: grid;
+      grid-template-columns: auto 40px auto;
+      align-items: center;
+      gap: 12px;
+    }
+    .furnaceStack {
+      display: grid;
+      gap: 8px;
+    }
+    .furnaceBars {
+      display: grid;
+      gap: 10px;
+      align-items: center;
+      justify-items: center;
+    }
+    .barWrap {
+      width: 90px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(0,0,0,.45);
+      border: 1px solid rgba(255,255,255,.12);
+      overflow: hidden;
+    }
+    .barFill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #ffb347, #ff6a00);
+    }
+    .barFill.fuel {
+      background: linear-gradient(90deg, #ffd36b, #d98b2b);
+    }
     .labelRow {
       display: flex;
       justify-content: center;
@@ -550,6 +635,34 @@
       </div>
 
       <div id="paneInventory" class="pane">
+        <div id="craftingPanel" class="craftingPanel">
+          <div class="panelTitle">Crafting</div>
+          <div class="craftingLayout">
+            <div id="craftGrid" class="craftGrid"></div>
+            <div class="craftArrow">→</div>
+            <div>
+              <div id="craftOutput" class="slot"></div>
+            </div>
+          </div>
+          <div id="craftRecipeList" class="recipeList"></div>
+        </div>
+
+        <div id="furnacePanel" class="furnacePanel">
+          <div class="panelTitle">Furnace</div>
+          <div class="furnaceLayout">
+            <div class="furnaceStack">
+              <div id="furnaceInput" class="slot"></div>
+              <div id="furnaceFuel" class="slot"></div>
+            </div>
+            <div class="furnaceBars">
+              <div class="barWrap"><div id="furnaceCookBar" class="barFill"></div></div>
+              <div class="barWrap"><div id="furnaceFuelBar" class="barFill fuel"></div></div>
+            </div>
+            <div>
+              <div id="furnaceOutput" class="slot"></div>
+            </div>
+          </div>
+        </div>
         <div class="sectionTitle">Player inventory</div>
         <div id="invMain" class="grid"></div>
 
@@ -638,6 +751,11 @@
       DIAMOND_ORE: 24,
       CRAFTING_TABLE: 25,
       FURNACE: 26,
+      STICK: 47,
+      COAL: 48,
+      CHARCOAL: 49,
+      IRON_INGOT: 50,
+      GOLD_INGOT: 51,
 
       // Tool placeholders (not placeable yet)
       WOODEN_SWORD: 27,
@@ -724,6 +842,16 @@
     const tabCreativeBtn = document.getElementById("tabCreative");
     const paneCreativeEl = document.getElementById("paneCreative");
     const paneInventoryEl = document.getElementById("paneInventory");
+    const craftingPanelEl = document.getElementById("craftingPanel");
+    const furnacePanelEl = document.getElementById("furnacePanel");
+    const craftGridEl = document.getElementById("craftGrid");
+    const craftOutputEl = document.getElementById("craftOutput");
+    const craftRecipeListEl = document.getElementById("craftRecipeList");
+    const furnaceInputEl = document.getElementById("furnaceInput");
+    const furnaceFuelEl = document.getElementById("furnaceFuel");
+    const furnaceOutputEl = document.getElementById("furnaceOutput");
+    const furnaceCookBarEl = document.getElementById("furnaceCookBar");
+    const furnaceFuelBarEl = document.getElementById("furnaceFuelBar");
     const creativeTabsEl = document.getElementById("creativeTabs");
     const creativeToolsEl = document.getElementById("creativeTools");
     const survivalToolsEl = document.getElementById("survivalTools");
@@ -1416,6 +1544,44 @@
       }
     }
 
+    function drawStick(ctx, tx, ty) {
+      const ox = tx*TILE, oy = ty*TILE;
+      ctx.clearRect(ox, oy, TILE, TILE);
+      ctx.imageSmoothingEnabled = false;
+      const W = "rgba(210,170,120,0.98)";
+      const S = "rgba(160,110,70,0.98)";
+      for (let i=0;i<12;i++) {
+        const x = ox + 3 + i;
+        const y = oy + 11 - Math.floor(i * 0.35);
+        ctx.fillStyle = W;
+        ctx.fillRect(x, y, 3, 3);
+        ctx.fillStyle = S;
+        ctx.fillRect(x+2, y+2, 1, 1);
+      }
+    }
+
+    function drawIngot(ctx, tx, ty, base, highlight) {
+      const ox = tx*TILE, oy = ty*TILE;
+      ctx.clearRect(ox, oy, TILE, TILE);
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = base;
+      ctx.fillRect(ox+2, oy+7, 12, 6);
+      ctx.fillStyle = highlight;
+      ctx.fillRect(ox+3, oy+8, 10, 2);
+      ctx.fillRect(ox+4, oy+9, 8, 1);
+    }
+
+    function drawCoal(ctx, tx, ty, base, shine) {
+      const ox = tx*TILE, oy = ty*TILE;
+      ctx.clearRect(ox, oy, TILE, TILE);
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = base;
+      ctx.fillRect(ox+4, oy+4, 8, 8);
+      ctx.fillStyle = shine;
+      ctx.fillRect(ox+6, oy+5, 3, 3);
+      ctx.fillRect(ox+5, oy+9, 2, 2);
+    }
+
     function drawTool(ctx, tx, ty, kind, matRGB, seedBase) {
       const ox = tx*TILE, oy = ty*TILE;
       ctx.clearRect(ox, oy, TILE, TILE);
@@ -1529,6 +1695,11 @@
         "furnace_top",
         "furnace_side",
         "furnace_front",
+        "stick",
+        "coal",
+        "charcoal",
+        "iron_ingot",
+        "gold_ingot",
         "wooden_sword",
         "wooden_pickaxe",
         "wooden_axe",
@@ -1595,6 +1766,12 @@
         const fuT = tileXY(T.furnace_top);   drawFurnace(ctx, fuT.tx, fuT.ty, "top", 3201);
         const fuS = tileXY(T.furnace_side);  drawFurnace(ctx, fuS.tx, fuS.ty, "side", 3202);
         const fuF = tileXY(T.furnace_front); drawFurnace(ctx, fuF.tx, fuF.ty, "front", 3203);
+
+        const st = tileXY(T.stick);          drawStick(ctx, st.tx, st.ty);
+        const co3 = tileXY(T.coal);          drawCoal(ctx, co3.tx, co3.ty, "rgba(25,25,25,0.98)", "rgba(120,120,120,0.4)");
+        const ch3 = tileXY(T.charcoal);      drawCoal(ctx, ch3.tx, ch3.ty, "rgba(70,50,35,0.98)", "rgba(160,120,80,0.35)");
+        const iIng = tileXY(T.iron_ingot);   drawIngot(ctx, iIng.tx, iIng.ty, "rgba(200,200,210,0.98)", "rgba(235,235,245,0.95)");
+        const gIng = tileXY(T.gold_ingot);   drawIngot(ctx, gIng.tx, gIng.ty, "rgba(230,185,65,0.98)", "rgba(255,230,145,0.95)");
 
         // Tool placeholders (icons only)
         const colWood = [156, 102, 56];
@@ -1726,6 +1903,11 @@
         furnace_top: "greystone.png",
         furnace_side: "greystone.png",
         furnace_front: "greystone.png",
+        stick: "wood_red.png",
+        coal: "stone_coal.png",
+        charcoal: "wood.png",
+        iron_ingot: "greystone.png",
+        gold_ingot: "gold.png",
       };
 
       for (const [ourName, kenName] of Object.entries(k)) {
@@ -1789,6 +1971,11 @@
         furnace_top: ["assets/minecraft/textures/block/furnace_top.png","assets/minecraft/textures/blocks/furnace_top.png"],
         furnace_side:["assets/minecraft/textures/block/furnace_side.png","assets/minecraft/textures/blocks/furnace_side.png"],
         furnace_front:["assets/minecraft/textures/block/furnace_front.png","assets/minecraft/textures/blocks/furnace_front.png"],
+        stick: ["assets/minecraft/textures/item/stick.png","assets/minecraft/textures/items/stick.png"],
+        coal: ["assets/minecraft/textures/item/coal.png","assets/minecraft/textures/items/coal.png"],
+        charcoal: ["assets/minecraft/textures/item/charcoal.png","assets/minecraft/textures/items/charcoal.png"],
+        iron_ingot: ["assets/minecraft/textures/item/iron_ingot.png","assets/minecraft/textures/items/iron_ingot.png"],
+        gold_ingot: ["assets/minecraft/textures/item/gold_ingot.png","assets/minecraft/textures/items/gold_ingot.png"],
 
         wooden_sword: ["assets/minecraft/textures/item/wooden_sword.png","assets/minecraft/textures/items/wood_sword.png"],
         wooden_pickaxe: ["assets/minecraft/textures/item/wooden_pickaxe.png","assets/minecraft/textures/items/wood_pickaxe.png"],
@@ -2724,6 +2911,11 @@ if (camMode === CAM_MODE.FIRST) {
       { id: B.IRON_ORE, name: "Iron Ore", icon: T.iron_ore, cat: "ores" },
       { id: B.GOLD_ORE, name: "Gold Ore", icon: T.gold_ore, cat: "ores" },
       { id: B.DIAMOND_ORE, name: "Diamond Ore", icon: T.diamond_ore, cat: "ores" },
+      { id: B.STICK, name: "Stick", icon: T.stick, cat: "materials" },
+      { id: B.COAL, name: "Coal", icon: T.coal, cat: "materials" },
+      { id: B.CHARCOAL, name: "Charcoal", icon: T.charcoal, cat: "materials" },
+      { id: B.IRON_INGOT, name: "Iron Ingot", icon: T.iron_ingot, cat: "materials" },
+      { id: B.GOLD_INGOT, name: "Gold Ingot", icon: T.gold_ingot, cat: "materials" },
       { id: B.CRAFTING_TABLE, name: "Crafting Table", icon: T.crafting_table_front, cat: "functional" },
       { id: B.FURNACE, name: "Furnace", icon: T.furnace_front, cat: "functional" },
       { id: B.WOODEN_SWORD, name: "Wooden Sword", icon: T.wooden_sword, cat: "tools" },
@@ -2758,6 +2950,47 @@ if (camMode === CAM_MODE.FIRST) {
       const f = BLOCK_LIST.find(b => b.id === id);
       return f ? f.icon : T.dirt;
     }
+
+    const CRAFTING_RECIPES = [
+      { name: "Planks", pattern: [[B.LOG]], out: { id: B.PLANKS, count: 4 } },
+      { name: "Sticks", pattern: [[B.PLANKS],[B.PLANKS]], out: { id: B.STICK, count: 4 } },
+      { name: "Crafting Table", pattern: [[B.PLANKS, B.PLANKS],[B.PLANKS, B.PLANKS]], out: { id: B.CRAFTING_TABLE, count: 1 } },
+      { name: "Furnace", pattern: [[B.COBBLE, B.COBBLE, B.COBBLE],[B.COBBLE, B.AIR, B.COBBLE],[B.COBBLE, B.COBBLE, B.COBBLE]], out: { id: B.FURNACE, count: 1 } },
+      { name: "Wooden Sword", pattern: [[B.PLANKS],[B.PLANKS],[B.STICK]], out: { id: B.WOODEN_SWORD, count: 1 } },
+      { name: "Wooden Pickaxe", pattern: [[B.PLANKS,B.PLANKS,B.PLANKS],[B.AIR,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.WOODEN_PICKAXE, count: 1 } },
+      { name: "Wooden Axe", pattern: [[B.PLANKS,B.PLANKS,B.AIR],[B.PLANKS,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.WOODEN_AXE, count: 1 } },
+      { name: "Wooden Shovel", pattern: [[B.PLANKS],[B.STICK],[B.STICK]], out: { id: B.WOODEN_SHOVEL, count: 1 } },
+      { name: "Wooden Hoe", pattern: [[B.PLANKS,B.PLANKS,B.AIR],[B.AIR,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.WOODEN_HOE, count: 1 } },
+      { name: "Stone Sword", pattern: [[B.COBBLE],[B.COBBLE],[B.STICK]], out: { id: B.STONE_SWORD, count: 1 } },
+      { name: "Stone Pickaxe", pattern: [[B.COBBLE,B.COBBLE,B.COBBLE],[B.AIR,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.STONE_PICKAXE, count: 1 } },
+      { name: "Stone Axe", pattern: [[B.COBBLE,B.COBBLE,B.AIR],[B.COBBLE,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.STONE_AXE, count: 1 } },
+      { name: "Stone Shovel", pattern: [[B.COBBLE],[B.STICK],[B.STICK]], out: { id: B.STONE_SHOVEL, count: 1 } },
+      { name: "Stone Hoe", pattern: [[B.COBBLE,B.COBBLE,B.AIR],[B.AIR,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.STONE_HOE, count: 1 } },
+      { name: "Iron Sword", pattern: [[B.IRON_INGOT],[B.IRON_INGOT],[B.STICK]], out: { id: B.IRON_SWORD, count: 1 } },
+      { name: "Iron Pickaxe", pattern: [[B.IRON_INGOT,B.IRON_INGOT,B.IRON_INGOT],[B.AIR,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.IRON_PICKAXE, count: 1 } },
+      { name: "Iron Axe", pattern: [[B.IRON_INGOT,B.IRON_INGOT,B.AIR],[B.IRON_INGOT,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.IRON_AXE, count: 1 } },
+      { name: "Iron Shovel", pattern: [[B.IRON_INGOT],[B.STICK],[B.STICK]], out: { id: B.IRON_SHOVEL, count: 1 } },
+      { name: "Iron Hoe", pattern: [[B.IRON_INGOT,B.IRON_INGOT,B.AIR],[B.AIR,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.IRON_HOE, count: 1 } },
+      { name: "Diamond Sword", pattern: [[B.DIAMOND],[B.DIAMOND],[B.STICK]], out: { id: B.DIAMOND_SWORD, count: 1 } },
+      { name: "Diamond Pickaxe", pattern: [[B.DIAMOND,B.DIAMOND,B.DIAMOND],[B.AIR,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.DIAMOND_PICKAXE, count: 1 } },
+      { name: "Diamond Axe", pattern: [[B.DIAMOND,B.DIAMOND,B.AIR],[B.DIAMOND,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.DIAMOND_AXE, count: 1 } },
+      { name: "Diamond Shovel", pattern: [[B.DIAMOND],[B.STICK],[B.STICK]], out: { id: B.DIAMOND_SHOVEL, count: 1 } },
+      { name: "Diamond Hoe", pattern: [[B.DIAMOND,B.DIAMOND,B.AIR],[B.AIR,B.STICK,B.AIR],[B.AIR,B.STICK,B.AIR]], out: { id: B.DIAMOND_HOE, count: 1 } },
+    ];
+
+    const SMELTING_RECIPES = new Map([
+      [B.IRON_ORE, { id: B.IRON_INGOT, count: 1 }],
+      [B.GOLD_ORE, { id: B.GOLD_INGOT, count: 1 }],
+      [B.SAND, { id: B.GLASS, count: 1 }],
+      [B.LOG, { id: B.CHARCOAL, count: 1 }],
+    ]);
+    const FUEL_TIMES = new Map([
+      [B.COAL, 16],
+      [B.CHARCOAL, 16],
+      [B.LOG, 6],
+      [B.PLANKS, 4],
+      [B.STICK, 2],
+    ]);
 
     function applyTileStyle(el, tileIdx) {
       // IMPORTANT: scale atlas so a 16px tile maps cleanly into the UI icon box.
@@ -2947,14 +3180,21 @@ if (camMode === CAM_MODE.FIRST) {
       updateHelp();
       updateViewModelVisibility();
     }
-    function setInventory(open) {
+    function setInventory(open, context = "inventory", entity = null) {
       inventoryOpen = open;
       if (open && chatOpen) setChat(false);
+      if (open) {
+        invContext = context;
+        activeBlockEntity = entity;
+      } else {
+        invContext = "inventory";
+        activeBlockEntity = null;
+      }
       invOverlay.style.display = open ? "grid" : "none";
       if (!open) { try { if (invCursorEl) invCursorEl.style.display = "none"; } catch(_) {} }
       lmbHeld = false; rmbHeld = false;
       if (open) {
-        invActiveTab = (gameMode === "creative") ? "creative" : "inventory";
+        invActiveTab = (gameMode === "creative" && invContext === "inventory") ? "creative" : "inventory";
         exitPointerLock();
         rmbDown = false;
         renderer.domElement.style.cursor = "";
@@ -3182,7 +3422,7 @@ if (e.code === "KeyP") {
       if (e.code === "KeyE") {
         keys.delete("KeyE");
         if (menuOverlay.style.display !== "none") return;
-        setInventory(!inventoryOpen);
+        setInventory(!inventoryOpen, "inventory");
         if (!inventoryOpen) resumeGameTryLock();
         return;
       }
@@ -4102,15 +4342,45 @@ let cursorStack = null;
 
 // Inventory/creative tabs
 let invActiveTab = "inventory"; // "inventory" | "creative"
+let invContext = "inventory"; // "inventory" | "crafting" | "furnace"
+let activeBlockEntity = null;
 const CREATIVE_CATS = [
   { key: "building", label: "Building" },
   { key: "nature", label: "Nature" },
   { key: "decoration", label: "Decor" },
   { key: "ores", label: "Ores" },
+  { key: "materials", label: "Materials" },
   { key: "functional", label: "Functional" },
   { key: "tools", label: "Tools" },
 ];
 let creativeCat = "building";
+
+const blockEntities = new Map();
+function blockKey(x, y, z) { return `${x},${y},${z}`; }
+function getBlockEntity(x, y, z, type) {
+  const key = blockKey(x, y, z);
+  let ent = blockEntities.get(key);
+  if (!ent || ent.type !== type) {
+    if (type === "crafting") {
+      ent = { type, slots: new Array(9).fill(null) };
+    } else if (type === "furnace") {
+      ent = {
+        type,
+        input: null,
+        fuel: null,
+        output: null,
+        burnTime: 0,
+        burnMax: 0,
+        cookTime: 0,
+        cookMax: 10,
+      };
+    } else {
+      ent = { type };
+    }
+    blockEntities.set(key, ent);
+  }
+  return ent;
+}
 
 
 function normItem(it) {
@@ -4129,7 +4399,14 @@ function setSlot(i, it) {
 
 function selectedItem() { return invSlots[hotbarIndex]; }
 function isToolId(id) { return id >= B.WOODEN_SWORD && id <= B.DIAMOND_HOE; }
-function isPlaceableId(id) { return !isToolId(id); }
+function isItemId(id) {
+  return id === B.STICK
+    || id === B.COAL
+    || id === B.CHARCOAL
+    || id === B.IRON_INGOT
+    || id === B.GOLD_INGOT;
+}
+function isPlaceableId(id) { return !isToolId(id) && !isItemId(id); }
 
 function selectedBlock() {
   if (slotCount(hotbarIndex) <= 0) return B.AIR;
@@ -4194,19 +4471,29 @@ function updateInvModeUI() {
   if (!invModeEl) return;
   const isC = (gameMode === "creative");
   invModeEl.textContent = isC ? "Creative" : "Survival";
+  if (invTitleEl) {
+    invTitleEl.textContent = invContext === "crafting"
+      ? "Crafting"
+      : (invContext === "furnace" ? "Furnace" : "Inventory");
+  }
 
   // Top tabs only exist in Creative (Minecraft-ish).
-  if (invTopTabsEl) invTopTabsEl.style.display = isC ? "flex" : "none";
-  if (!isC) invActiveTab = "inventory";
+  const inInventory = invContext === "inventory";
+  if (invTopTabsEl) invTopTabsEl.style.display = (isC && inInventory) ? "flex" : "none";
+  if (!isC || !inInventory) invActiveTab = "inventory";
 
   if (tabInvBtn) tabInvBtn.classList.toggle("active", invActiveTab === "inventory");
   if (tabCreativeBtn) tabCreativeBtn.classList.toggle("active", invActiveTab === "creative");
 
-  const showCreative = isC && invActiveTab === "creative";
-  const showInv = invActiveTab === "inventory";
+  const showCreative = isC && inInventory && invActiveTab === "creative";
+  const showInv = inInventory && invActiveTab === "inventory";
+  const showCrafting = invContext === "crafting";
+  const showFurnace = invContext === "furnace";
 
   if (paneCreativeEl) paneCreativeEl.style.display = showCreative ? "block" : "none";
-  if (paneInventoryEl) paneInventoryEl.style.display = showInv ? "block" : "none";
+  if (paneInventoryEl) paneInventoryEl.style.display = (showInv || showCrafting || showFurnace) ? "block" : "none";
+  if (craftingPanelEl) craftingPanelEl.style.display = showCrafting ? "block" : "none";
+  if (furnacePanelEl) furnacePanelEl.style.display = showFurnace ? "block" : "none";
 
   if (creativeToolsEl) creativeToolsEl.style.display = showCreative ? "flex" : "none";
   if (survivalToolsEl) survivalToolsEl.style.display = showInv ? "block" : "none";
@@ -4326,12 +4613,347 @@ function renderCursor() {
   invCursorEl.style.display = "block";
 }
 
+function tryMoveStackToInventory(stack) {
+  if (!stack) return false;
+  const left = addToInventory(stack.id, stack.count);
+  if (left <= 0) return true;
+  stack.count = left;
+  return left !== stack.count;
+}
+
+function handleSlotMouseDownGeneric(getSlot, setSlot, e, options = {}) {
+  if (!inventoryOpen) return;
+  if (e.button !== 0 && e.button !== 2) return;
+  e.preventDefault();
+
+  if (options.onShift && e.shiftKey && e.button === 0) {
+    const moved = options.onShift();
+    if (moved) refreshInventoryUI();
+    return;
+  }
+
+  const right = (e.button === 2);
+  const s = normItem(getSlot());
+  const c = normItem(cursorStack);
+
+  if (right) {
+    if (!c && s) {
+      const take = Math.ceil(s.count / 2);
+      cursorStack = { id: s.id, count: take };
+      const rem = s.count - take;
+      setSlot(rem > 0 ? { id: s.id, count: rem } : null);
+      refreshInventoryUI();
+      return;
+    }
+    if (c) {
+      if (!s) {
+        setSlot({ id: c.id, count: 1 });
+        c.count -= 1;
+        cursorStack = (c.count > 0) ? c : null;
+        refreshInventoryUI();
+        return;
+      }
+      if (s.id === c.id && s.count < STACK_MAX) {
+        s.count += 1;
+        c.count -= 1;
+        cursorStack = (c.count > 0) ? c : null;
+        setSlot(s);
+        refreshInventoryUI();
+        return;
+      }
+      return;
+    }
+    return;
+  }
+
+  if (!c && s) {
+    cursorStack = { id: s.id, count: s.count };
+    setSlot(null);
+    refreshInventoryUI();
+    return;
+  }
+
+  if (c) {
+    if (!s) {
+      setSlot({ id: c.id, count: c.count });
+      cursorStack = null;
+      refreshInventoryUI();
+      return;
+    }
+    if (s.id === c.id && s.count < STACK_MAX) {
+      const can = Math.min(STACK_MAX - s.count, c.count);
+      s.count += can;
+      c.count -= can;
+      setSlot(s);
+      cursorStack = (c.count > 0) ? c : null;
+      refreshInventoryUI();
+      return;
+    }
+    setSlot({ id: c.id, count: c.count });
+    cursorStack = { id: s.id, count: s.count };
+    refreshInventoryUI();
+    return;
+  }
+}
+
+function normalizeCraftGrid(grid) {
+  const ids = grid.map(it => (it ? it.id : B.AIR));
+  let minR = 3, minC = 3, maxR = -1, maxC = -1;
+  for (let r=0; r<3; r++) {
+    for (let c=0; c<3; c++) {
+      const id = ids[r*3 + c];
+      if (id !== B.AIR) {
+        if (r < minR) minR = r;
+        if (c < minC) minC = c;
+        if (r > maxR) maxR = r;
+        if (c > maxC) maxC = c;
+      }
+    }
+  }
+  if (maxR === -1) return { w: 0, h: 0, data: [] };
+  const w = maxC - minC + 1;
+  const h = maxR - minR + 1;
+  const data = [];
+  for (let r=0; r<h; r++) {
+    const row = [];
+    for (let c=0; c<w; c++) {
+      row.push(ids[(minR + r) * 3 + (minC + c)]);
+    }
+    data.push(row);
+  }
+  return { w, h, data };
+}
+
+function matchCraftingRecipe(grid) {
+  const norm = normalizeCraftGrid(grid);
+  if (norm.w === 0) return null;
+  for (const recipe of CRAFTING_RECIPES) {
+    const pat = recipe.pattern;
+    const rh = pat.length;
+    const rw = pat[0]?.length || 0;
+    if (rw !== norm.w || rh !== norm.h) continue;
+    let ok = true;
+    for (let r=0; r<rh && ok; r++) {
+      for (let c=0; c<rw; c++) {
+        const need = pat[r][c];
+        const got = norm.data[r][c];
+        if ((need ?? B.AIR) !== (got ?? B.AIR)) { ok = false; break; }
+      }
+    }
+    if (ok) return recipe;
+  }
+  return null;
+}
+
+function renderSlotElement(el, item) {
+  if (!el) return;
+  el.innerHTML = "";
+  if (!item) return;
+  const sw = document.createElement("div");
+  sw.className = "sw";
+  setSlotSwatch(sw, item.id);
+  el.appendChild(sw);
+  renderCount(el, item.count);
+}
+
+function renderCraftingUI() {
+  const ent = (invContext === "crafting") ? activeBlockEntity : null;
+  if (!ent || !craftGridEl || !craftOutputEl || !craftRecipeListEl) return;
+
+  craftGridEl.innerHTML = "";
+  for (let i=0; i<9; i++) {
+    const d = document.createElement("div");
+    d.className = "slot";
+    renderSlotElement(d, normItem(ent.slots[i]));
+    d.addEventListener("mousedown", (e) => handleSlotMouseDownGeneric(
+      () => ent.slots[i],
+      (val) => { ent.slots[i] = normItem(val); },
+      e,
+      {
+        onShift: () => {
+          const s = normItem(ent.slots[i]);
+          if (!s) return false;
+          const remaining = addToInventory(s.id, s.count);
+          if (remaining === s.count) return false;
+          ent.slots[i] = remaining > 0 ? { id: s.id, count: remaining } : null;
+          return true;
+        },
+      }
+    ));
+    craftGridEl.appendChild(d);
+  }
+
+  const recipe = matchCraftingRecipe(ent.slots);
+  renderSlotElement(craftOutputEl, recipe ? recipe.out : null);
+  craftOutputEl.onmousedown = (e) => {
+    if (!recipe) return;
+    if (e.button !== 0 && e.button !== 2) return;
+    e.preventDefault();
+    if (e.shiftKey && e.button === 0) {
+      if (!canAddToInventory(recipe.out.id, recipe.out.count)) return;
+      addToInventory(recipe.out.id, recipe.out.count);
+    } else {
+      const c = normItem(cursorStack);
+      if (!c) {
+        cursorStack = { id: recipe.out.id, count: recipe.out.count };
+      } else if (c.id === recipe.out.id && c.count + recipe.out.count <= STACK_MAX) {
+        c.count += recipe.out.count;
+        cursorStack = c;
+      } else {
+        return;
+      }
+    }
+    for (let i=0; i<ent.slots.length; i++) {
+      const s = ent.slots[i];
+      if (s) {
+        s.count -= 1;
+        ent.slots[i] = (s.count > 0) ? s : null;
+      }
+    }
+    refreshInventoryUI();
+  };
+
+  craftRecipeListEl.innerHTML = "";
+  for (const rec of CRAFTING_RECIPES) {
+    const row = document.createElement("div");
+    row.className = "recipeRow" + (recipe && rec === recipe ? " craftable" : "");
+    const iconSlot = document.createElement("div");
+    iconSlot.className = "slot";
+    renderSlotElement(iconSlot, rec.out);
+    const label = document.createElement("div");
+    label.textContent = `${rec.name} (x${rec.out.count})`;
+    row.appendChild(iconSlot);
+    row.appendChild(label);
+    craftRecipeListEl.appendChild(row);
+  }
+}
+
+function renderFurnaceUI() {
+  const ent = (invContext === "furnace") ? activeBlockEntity : null;
+  if (!ent || !furnaceInputEl || !furnaceFuelEl || !furnaceOutputEl) return;
+
+  renderSlotElement(furnaceInputEl, normItem(ent.input));
+  renderSlotElement(furnaceFuelEl, normItem(ent.fuel));
+  renderSlotElement(furnaceOutputEl, normItem(ent.output));
+
+  furnaceInputEl.onmousedown = (e) => handleSlotMouseDownGeneric(
+    () => ent.input,
+    (val) => { ent.input = normItem(val); },
+    e,
+    {
+      onShift: () => {
+        const s = normItem(ent.input);
+        if (!s) return false;
+        const remaining = addToInventory(s.id, s.count);
+        if (remaining === s.count) return false;
+        ent.input = remaining > 0 ? { id: s.id, count: remaining } : null;
+        return true;
+      },
+    }
+  );
+  furnaceFuelEl.onmousedown = (e) => handleSlotMouseDownGeneric(
+    () => ent.fuel,
+    (val) => { ent.fuel = normItem(val); },
+    e,
+    {
+      onShift: () => {
+        const s = normItem(ent.fuel);
+        if (!s) return false;
+        const remaining = addToInventory(s.id, s.count);
+        if (remaining === s.count) return false;
+        ent.fuel = remaining > 0 ? { id: s.id, count: remaining } : null;
+        return true;
+      },
+    }
+  );
+  furnaceOutputEl.onmousedown = (e) => {
+    if (!inventoryOpen) return;
+    if (e.button !== 0 && e.button !== 2) return;
+    const s = normItem(ent.output);
+    if (!s) return;
+    if (e.shiftKey && e.button === 0) {
+      const remaining = addToInventory(s.id, s.count);
+      if (remaining === s.count) return;
+      ent.output = remaining > 0 ? { id: s.id, count: remaining } : null;
+    } else {
+      handleSlotMouseDownGeneric(
+        () => ent.output,
+        (val) => { ent.output = normItem(val); },
+        e
+      );
+    }
+    refreshInventoryUI();
+  };
+
+  if (furnaceCookBarEl) {
+    const pct = ent.cookMax > 0 ? Math.min(1, ent.cookTime / ent.cookMax) : 0;
+    furnaceCookBarEl.style.width = `${Math.round(pct * 100)}%`;
+  }
+  if (furnaceFuelBarEl) {
+    const pct = ent.burnMax > 0 ? Math.min(1, ent.burnTime / ent.burnMax) : 0;
+    furnaceFuelBarEl.style.width = `${Math.round(pct * 100)}%`;
+  }
+}
+
+function canAcceptSmeltOutput(ent, recipe) {
+  if (!recipe) return false;
+  const out = normItem(ent.output);
+  if (!out) return true;
+  if (out.id !== recipe.id) return false;
+  return (out.count + recipe.count) <= STACK_MAX;
+}
+
+function updateFurnaces(dt) {
+  for (const ent of blockEntities.values()) {
+    if (!ent || ent.type !== "furnace") continue;
+    const input = normItem(ent.input);
+    const recipe = input ? SMELTING_RECIPES.get(input.id) : null;
+
+    if (ent.burnTime > 0) {
+      ent.burnTime = Math.max(0, ent.burnTime - dt);
+    }
+
+    const canCook = !!recipe && canAcceptSmeltOutput(ent, recipe);
+
+    if (ent.burnTime <= 0 && canCook) {
+      const fuel = normItem(ent.fuel);
+      const fuelTime = fuel ? FUEL_TIMES.get(fuel.id) : 0;
+      if (fuelTime) {
+        ent.burnTime = fuelTime;
+        ent.burnMax = fuelTime;
+        fuel.count -= 1;
+        ent.fuel = fuel.count > 0 ? fuel : null;
+      }
+    }
+
+    if (ent.burnTime > 0 && canCook) {
+      ent.cookTime += dt;
+      if (ent.cookTime >= ent.cookMax) {
+        ent.cookTime = 0;
+        input.count -= 1;
+        ent.input = input.count > 0 ? input : null;
+        const out = normItem(ent.output);
+        if (!out) {
+          ent.output = { id: recipe.id, count: recipe.count };
+        } else {
+          out.count += recipe.count;
+          ent.output = out;
+        }
+      }
+    } else {
+      ent.cookTime = 0;
+    }
+  }
+}
+
 function refreshInventoryUI() {
   updateInvModeUI();
   renderHotbarHud();
   renderInvHotbar();
   renderInvMain();
   renderCursor();
+  renderCraftingUI();
+  renderFurnaceUI();
   // Creative palette is filtered via search + category tabs.
   if (gameMode === "creative" && invActiveTab === "creative") { buildCreativeTabs(); renderPaletteFromUI(); }
 }
@@ -4549,6 +5171,7 @@ try { updateHeldBlock3D(); } catch(_) {}
     // Simple MC-ish drop mapping (no item entities yet, so we only break if we can store it).
     let drop = t;
     if (t === B.GRASS) drop = B.DIRT;
+    if (t === B.COAL_ORE) drop = B.COAL;
     if (t === B.WATER || t === B.LAVA || t === B.BEDROCK) drop = B.AIR;
 
     if (drop !== B.AIR && !canAddToInventory(drop, 1)) {
@@ -4557,10 +5180,16 @@ try { updateHeldBlock3D(); } catch(_) {}
     }
 
     setEdit(hit.x, hit.y, hit.z, B.AIR);
+    if (t === B.CRAFTING_TABLE || t === B.FURNACE) {
+      blockEntities.delete(blockKey(hit.x, hit.y, hit.z));
+    }
     if (drop !== B.AIR) addToInventory(drop, 1);
   } else {
     // Creative: instant break, no inventory constraints.
     setEdit(hit.x, hit.y, hit.z, B.AIR);
+    if (t === B.CRAFTING_TABLE || t === B.FURNACE) {
+      blockEntities.delete(blockKey(hit.x, hit.y, hit.z));
+    }
   }
 
   markChunksDirtyForBlock(hit.x, hit.z);
@@ -4597,7 +5226,7 @@ try { updateHeldBlock3D(); } catch(_) {}
   return true;
 }
 
-    function pickBlockIntoSlot(hit) {
+function pickBlockIntoSlot(hit) {
   if (!hit) return;
   const t = getBlock(hit.x, hit.y, hit.z);
   if (t === B.AIR) return;
@@ -4614,6 +5243,22 @@ try { updateHeldBlock3D(); } catch(_) {}
     }
   }
   triggerSwing();
+}
+
+function tryOpenBlockUi(hit) {
+  if (!hit) return false;
+  const t = getBlock(hit.x, hit.y, hit.z);
+  if (t === B.CRAFTING_TABLE) {
+    const ent = getBlockEntity(hit.x, hit.y, hit.z, "crafting");
+    setInventory(true, "crafting", ent);
+    return true;
+  }
+  if (t === B.FURNACE) {
+    const ent = getBlockEntity(hit.x, hit.y, hit.z, "furnace");
+    setInventory(true, "furnace", ent);
+    return true;
+  }
+  return false;
 }
 
     window.addEventListener("mousedown", (e) => {
@@ -4634,8 +5279,9 @@ try { updateHeldBlock3D(); } catch(_) {}
     
       if (e.button === 2) { // place (continuous while held) OR drag look fallback
         if (isLocked()) {
-          rmbHeld = true;
           const hit = currentHit();
+          if (tryOpenBlockUi(hit)) return;
+          rmbHeld = true;
           placeAt(hit);
           lastPlaceTime = performance.now();
         } else {
@@ -4669,7 +5315,9 @@ try { updateHeldBlock3D(); } catch(_) {}
     
       if (dt < 300 && moved < 10) {
         const hit = currentHit();
-        placeAt(hit);
+        if (!tryOpenBlockUi(hit)) {
+          placeAt(hit);
+        }
       }
     });
     
@@ -4788,6 +5436,8 @@ try { updateHeldBlock3D(); } catch(_) {}
     function animate() {
       requestAnimationFrame(animate);
       const dt = Math.min(0.033, clock.getDelta());
+      updateFurnaces(dt);
+      if (inventoryOpen && invContext === "furnace") renderFurnaceUI();
 
       if (gameActive()) {
         const forward = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
