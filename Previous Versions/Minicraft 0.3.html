@@ -3725,7 +3725,7 @@ function getColumn(x, z) {
         if (y <= 26 && r < 0.0075) return B.GOLD_ORE;
         if (y <= 54 && r < 0.0150) return B.IRON_ORE;
         if (y <= 92 && r < 0.0220) return B.COAL_ORE;
-        return oreInStone();
+        return B.COBBLE;
       }
 
       const col = getColumn(x, z);
@@ -3770,19 +3770,19 @@ function getColumn(x, z) {
       // sands: deeper sand before stone
       if (surface === B.SAND) {
         if (depth <= 4) return B.SAND;
-        return B.COBBLE;
+        return oreInStone();
       }
 
       // mountains: more stone showing
       if (biome === 3) {
-        if (depth <= 1) return B.COBBLE;
+        if (depth <= 1) return oreInStone();
         if (depth <= 3) return B.DIRT;
-        return B.COBBLE;
+        return oreInStone();
       }
 
       // plains/forest
       if (depth <= 2) return B.DIRT;
-      return B.COBBLE;
+      return oreInStone();
     }
 
 
