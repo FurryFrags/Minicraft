@@ -3670,10 +3670,10 @@ if (e.code === "KeyP") {
     }, { passive: true });
 
     // ======================================================
-    // Minecraft-ish fractal world gen (FBM + ridged noise)
-    // - Much larger scale features (real mountains)
-    // - Taller WORLD_H so peaks don't get squashed
-    // - Column memo so meshing doesn't re-run noise per-voxel
+    // Bilinear world gen + coord-anchored RNG
+    // - Chunk-corner RNG anchors (no stored noise)
+    // - Bilinear gradients across chunk corners
+    // - Biome grid islands with per-biome jaggedness
     // ======================================================
         // World seed (random by default; set ?seed=12345 to reproduce)
     const WORLD_SEED = (() => {
@@ -3711,11 +3711,11 @@ function smoothstep(edge0, edge1, x) {
   return t * t * (3 - 2 * t);
 }
 
-function hash2i(x, z) {
+    function hash2i(x, z) {
       const SA = WORLD_SEED | 0;
       const SB = Math.imul(WORLD_SEED, 0x9e3779b9) | 0;
       let n = Math.imul(((x | 0) ^ SA), 374761393) + Math.imul(((z | 0) ^ SB), 668265263);
-n = (n ^ (n >>> 13)) >>> 0;
+      n = (n ^ (n >>> 13)) >>> 0;
       n = Math.imul(n, 1274126177) >>> 0;
       n = (n ^ (n >>> 16)) >>> 0;
       return n >>> 0;
@@ -3739,248 +3739,197 @@ n = (n ^ (n >>> 13)) >>> 0;
     function hash3f(x, y, z) { return hash3i(x, y, z) / 4294967295; }
 
 
-    function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
-    function grad2(h, x, y) {
-      // 8-ish gradient directions (cheap + stable)
-      switch (h & 7) {
-        case 0: return  x + y;
-        case 1: return -x + y;
-        case 2: return  x - y;
-        case 3: return -x - y;
-        case 4: return  x;
-        case 5: return -x;
-        case 6: return  y;
-        default: return -y;
+    function seededRng(seed) {
+      let s = seed >>> 0;
+      return () => {
+        s ^= s << 13;
+        s ^= s >>> 17;
+        s ^= s << 5;
+        return s >>> 0;
+      };
+    }
+    function rngFloat(rng) { return rng() / 4294967295; }
+    function rngSigned(rng) { return rngFloat(rng) * 2 - 1; }
+
+    function jaggedFromSeed(seed, bits) {
+      let s = seed >>> 0;
+      let sum = 0;
+      for (let i = 0; i < bits; i++) {
+        s ^= s << 13;
+        s ^= s >>> 17;
+        s ^= s << 5;
+        sum += (s & 1) ? 1 : -1;
       }
-    }
-    function grad3(h, x, y, z) {
-      // 12-ish gradient directions
-      switch (h & 15) {
-        case 0:  return  x + y;
-        case 1:  return -x + y;
-        case 2:  return  x - y;
-        case 3:  return -x - y;
-        case 4:  return  x + z;
-        case 5:  return -x + z;
-        case 6:  return  x - z;
-        case 7:  return -x - z;
-        case 8:  return  y + z;
-        case 9:  return -y + z;
-        case 10: return  y - z;
-        case 11: return -y - z;
-        case 12: return  x + y;
-        case 13: return -x + y;
-        case 14: return  x - y;
-        default: return -x - y;
-      }
-    }
-    function perlin2(x, y) {
-      const xi = Math.floor(x), yi = Math.floor(y);
-      const xf = x - xi,      yf = y - yi;
-      const u = fade(xf),     v = fade(yf);
-
-      const aa = hash2i(xi,     yi);
-      const ba = hash2i(xi + 1, yi);
-      const ab = hash2i(xi,     yi + 1);
-      const bb = hash2i(xi + 1, yi + 1);
-
-      const x1 = lerp(grad2(aa, xf,     yf),     grad2(ba, xf - 1, yf),     u);
-      const x2 = lerp(grad2(ab, xf,     yf - 1), grad2(bb, xf - 1, yf - 1), u);
-      // roughly normalize into [-1,1]
-      return lerp(x1, x2, v) * 0.70710678;
-    }
-    function perlin3(x, y, z) {
-      const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
-      const xf = x - xi,      yf = y - yi,      zf = z - zi;
-      const u = fade(xf),     v = fade(yf),     w = fade(zf);
-
-      const aaa = hash3i(xi,     yi,     zi);
-      const baa = hash3i(xi + 1, yi,     zi);
-      const aba = hash3i(xi,     yi + 1, zi);
-      const bba = hash3i(xi + 1, yi + 1, zi);
-      const aab = hash3i(xi,     yi,     zi + 1);
-      const bab = hash3i(xi + 1, yi,     zi + 1);
-      const abb = hash3i(xi,     yi + 1, zi + 1);
-      const bbb = hash3i(xi + 1, yi + 1, zi + 1);
-
-      const x1 = lerp(grad3(aaa, xf,     yf,     zf),     grad3(baa, xf - 1, yf,     zf),     u);
-      const x2 = lerp(grad3(aba, xf,     yf - 1, zf),     grad3(bba, xf - 1, yf - 1, zf),     u);
-      const y1 = lerp(x1, x2, v);
-
-      const x3 = lerp(grad3(aab, xf,     yf,     zf - 1), grad3(bab, xf - 1, yf,     zf - 1), u);
-      const x4 = lerp(grad3(abb, xf,     yf - 1, zf - 1), grad3(bbb, xf - 1, yf - 1, zf - 1), u);
-      const y2 = lerp(x3, x4, v);
-
-      return lerp(y1, y2, w) * 0.70710678;
+      return bits > 0 ? (sum / bits) : 0;
     }
 
-    function fbm2(x, y, octaves = 5, lacunarity = 2.0, gain = 0.5) {
-      let sum = 0, amp = 1, freq = 1, norm = 0;
-      for (let i = 0; i < octaves; i++) {
-        sum += amp * perlin2(x * freq, y * freq);
-        norm += amp;
-        amp *= gain;
-        freq *= lacunarity;
-      }
-      return sum / (norm || 1);
-    }
-    function fbm3(x, y, z, octaves = 4, lacunarity = 2.0, gain = 0.5) {
-      let sum = 0, amp = 1, freq = 1, norm = 0;
-      for (let i = 0; i < octaves; i++) {
-        sum += amp * perlin3(x * freq, y * freq, z * freq);
-        norm += amp;
-        amp *= gain;
-        freq *= lacunarity;
-      }
-      return sum / (norm || 1);
-    }
-
-    function ridged2(x, y, octaves = 4, lacunarity = 2.0, gain = 0.55) {
-      let sum = 0, amp = 0.9, freq = 1, norm = 0;
-      for (let i = 0; i < octaves; i++) {
-        let n = perlin2(x * freq, y * freq);
-        n = 1.0 - Math.abs(n);
-        n *= n;
-        sum += n * amp;
-        norm += amp;
-        amp *= gain;
-        freq *= lacunarity;
-      }
-      return sum / (norm || 1);
-    }
-
-    // Column memo to avoid doing noise repeatedly for each y in the same (x,z) column.
-    // This keeps WORLD_H large without tanking chunk meshing.
+    // Column memo to avoid repeated column work while meshing.
     const BIOME = {
-      PLAINS: 0,
-      FOREST: 1,
-      DESERT: 2,
-      MOUNTAIN: 3,
+      OCEAN: 0,
+      PLAINS: 1,
+      FOREST: 2,
+      DESERT: 3,
       TAIGA: 4,
       SNOWY: 5,
       SWAMP: 6,
+      MOUNTAIN: 7,
     };
-    const columnMemo = new Map(); // "x,z" -> {top, biome, tree, cactus, riverMask, ravineMask, marker}
+    const BIOME_GRID = 64;
+    const BIOME_RADIUS = BIOME_GRID * 0.42;
+    const BIOME_PATTERN_SIZE = 4;
+    const BIOME_PATTERN = (() => {
+      const land = [BIOME.PLAINS, BIOME.FOREST, BIOME.DESERT, BIOME.TAIGA, BIOME.SNOWY, BIOME.SWAMP, BIOME.MOUNTAIN];
+      const rng = seededRng(WORLD_SEED ^ 0xa5a5a5a5);
+      const out = [];
+      for (let i = 0; i < BIOME_PATTERN_SIZE * BIOME_PATTERN_SIZE; i++) {
+        out.push(land[Math.floor(rngFloat(rng) * land.length)]);
+      }
+      return out;
+    })();
+
+    function biomeForCell(gx, gz) {
+      const ix = mod(gx, BIOME_PATTERN_SIZE);
+      const iz = mod(gz, BIOME_PATTERN_SIZE);
+      return BIOME_PATTERN[iz * BIOME_PATTERN_SIZE + ix];
+    }
+
+    function biomeAt(x, z) {
+      const gx = floorDiv(x, BIOME_GRID);
+      const gz = floorDiv(z, BIOME_GRID);
+      const centerX = gx * BIOME_GRID + BIOME_GRID * 0.5;
+      const centerZ = gz * BIOME_GRID + BIOME_GRID * 0.5;
+      const dx = x - centerX;
+      const dz = z - centerZ;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      const islandMask = smoothstep(BIOME_RADIUS * 0.6, BIOME_RADIUS, dist);
+      if (islandMask >= 1) {
+        return { biome: BIOME.OCEAN, islandMask: 0 };
+      }
+      return { biome: biomeForCell(gx, gz), islandMask: 1 - islandMask };
+    }
+
+    function biomeJaggedBits(biome) {
+      switch (biome) {
+        case BIOME.FOREST: return 4; // flatter
+        case BIOME.SNOWY: return 2;  // more varied
+        case BIOME.MOUNTAIN: return 6;
+        case BIOME.SWAMP: return 3;
+        case BIOME.DESERT: return 3;
+        case BIOME.TAIGA: return 3;
+        case BIOME.PLAINS: return 4;
+        default: return 1;
+      }
+    }
+
+    function biomeBaseHeight(biome) {
+      switch (biome) {
+        case BIOME.MOUNTAIN: return 42;
+        case BIOME.SNOWY: return 28;
+        case BIOME.TAIGA: return 22;
+        case BIOME.FOREST: return 20;
+        case BIOME.SWAMP: return 8;
+        case BIOME.DESERT: return 12;
+        case BIOME.PLAINS: return 16;
+        default: return -10; // ocean
+      }
+    }
+
+    function biomeHeightAmp(biome) {
+      switch (biome) {
+        case BIOME.MOUNTAIN: return 24;
+        case BIOME.SNOWY: return 16;
+        case BIOME.TAIGA: return 14;
+        case BIOME.FOREST: return 10;
+        case BIOME.SWAMP: return 6;
+        case BIOME.DESERT: return 8;
+        case BIOME.PLAINS: return 7;
+        default: return 4;
+      }
+    }
+
+    function biomeJaggedAmp(biome) {
+      switch (biome) {
+        case BIOME.MOUNTAIN: return 12;
+        case BIOME.SNOWY: return 10;
+        case BIOME.TAIGA: return 8;
+        case BIOME.FOREST: return 6;
+        case BIOME.SWAMP: return 4;
+        case BIOME.DESERT: return 5;
+        case BIOME.PLAINS: return 5;
+        default: return 3;
+      }
+    }
+
+    function cornerHeight(wx, wz) {
+      const info = biomeAt(wx, wz);
+      const biome = info.biome;
+      const islandMask = info.islandMask;
+      const rng = seededRng(hash2i(wx, wz));
+      const base = SEA_LEVEL + biomeBaseHeight(biome);
+      const amp = biomeHeightAmp(biome);
+      const jagBits = biomeJaggedBits(biome);
+      const jag = jaggedFromSeed(hash2i(wx + 11, wz - 7), jagBits) * biomeJaggedAmp(biome);
+      const height = base + rngSigned(rng) * amp + jag;
+      if (biome === BIOME.OCEAN) return Math.floor(height);
+      const oceanBase = SEA_LEVEL - 12 + rngSigned(rng) * 3;
+      return Math.floor(lerp(oceanBase, height, islandMask));
+    }
+
+    function bilerp(h00, h10, h01, h11, tx, tz) {
+      const hx0 = lerp(h00, h10, tx);
+      const hx1 = lerp(h01, h11, tx);
+      return lerp(hx0, hx1, tz);
+    }
+
+    const columnMemo = new Map(); // "x,z" -> {top, biome, tree, cactus, mirrorCeil, mirrorFloor, marker}
 
 function getColumn(x, z) {
   const key = x + "," + z;
   let c = columnMemo.get(key);
   if (c) return c;
 
-  // ==========================================================
-  // Minecraft-ish terrain shaping (lite, but more faithful):
-  // - "Continentalness" at very low frequency => big landmasses
-  // - "Erosion" controls how rough/flat regions feel
-  // - "Peaks" are a selective overlay so mountains aren't spammy
-  // ==========================================================
+  const cx = floorDiv(x, CHUNK);
+  const cz = floorDiv(z, CHUNK);
+  const wx0 = cx * CHUNK;
+  const wz0 = cz * CHUNK;
+  const tx = mod(x, CHUNK) / CHUNK;
+  const tz = mod(z, CHUNK) / CHUNK;
 
-  // Continentalness (big features, avoids "archipelago world")
-  const cont = fbm2(x * 0.00055, z * 0.00055, 5, 2.02, 0.5); // ~[-1,1]
-  let cont01 = (cont + 1) * 0.5; // [0,1]
-  // Bias slightly toward land so the default isn't endless ocean.
-  cont01 = clamp01(Math.pow(cont01, 0.62));
+  const h00 = cornerHeight(wx0, wz0);
+  const h10 = cornerHeight(wx0 + CHUNK, wz0);
+  const h01 = cornerHeight(wx0, wz0 + CHUNK);
+  const h11 = cornerHeight(wx0 + CHUNK, wz0 + CHUNK);
 
-  // Land mask: 0 = open ocean, 1 = deep inland
-  const land = smoothstep(0.36, 0.62, cont01);
-
-  // Erosion (flat vs rugged)
-  const eros = fbm2(x * 0.00105 + 190.0, z * 0.00105 - 75.0, 4, 2.0, 0.5); // ~[-1,1]
-  const eros01 = (eros + 1) * 0.5;
-  // rough=1 in low-erosion zones (rugged), rough=0 in high-erosion zones (flat)
-  const rough = 1.0 - smoothstep(0.35, 0.78, eros01);
-
-  // Mid-frequency hills/undulation
-  const hills = fbm2(x * 0.0046, z * 0.0046, 5, 2.0, 0.5); // ~[-1,1]
-
-  // Ridged peaks field (used only when the mountain mask allows)
-  const ridBase = ridged2(x * 0.0026, z * 0.0026, 5, 2.0, 0.55); // [0,1]
-  const ridSharp = Math.pow(ridBase, 1.9);
-
-  // Temperature / moisture => base biomes
-  const temp  = fbm2(x * 0.0012 + 100.0, z * 0.0012 - 40.0, 3, 2.0, 0.5);
-  const moist = fbm2(x * 0.0012 - 50.0,  z * 0.0012 + 80.0, 3, 2.0, 0.5);
-  const temp01 = (temp + 1) * 0.5;
-  const moist01 = (moist + 1) * 0.5;
-  const baseForest = (moist > 0.22); // forest coverage knob
-
-  // Plains flatter than forests; both modulated by erosion.
-  const baseHillsAmp = baseForest ? 38 : 16;
-  const hillsAmp = baseHillsAmp * (0.45 + 0.55 * rough);
-
-  // Mountain mask (rarer + prefers inland + prefers rugged zones)
-  const m0 = fbm2(x * 0.00110 + 300.0, z * 0.00110 - 120.0, 3, 2.0, 0.5); // ~[-1,1]
-  const m01 = (m0 + 1) * 0.5;
-  let mMask = smoothstep(0.78, 0.93, m01);
-  mMask = Math.pow(mMask, 2.2);
-  // Keep mountains off coasts/ocean and bias them to rugged regions.
-  mMask *= smoothstep(0.55, 0.98, land);
-  mMask *= (0.35 + 0.65 * rough);
-
-  // Breakup field: cut passes/valleys so ranges aren't continuous walls.
-  const b0 = fbm2(x * 0.0017 - 50.0, z * 0.0017 + 90.0, 3, 2.0, 0.5); // ~[-1,1]
-  const b01 = (b0 + 1) * 0.5;
-  const gap = smoothstep(0.55, 0.80, b01);
-  mMask *= (1.0 - gap * 0.75);
-
-  // Base elevation:
-  // - oceans have a floor below sea level
-  // - inland rises gently above sea level to form continents, not islands
-  const oceanFloor = -72; // below SEA_LEVEL (clamped later)
-  const inlandRise = 34;  // above SEA_LEVEL
-  let base = SEA_LEVEL + lerp(oceanFloor, inlandRise, land);
-
-  // Final top height
-  let top = Math.floor(
-    base
-    + hills * hillsAmp
-    + (mMask * ridSharp) * 380
-  );
-
-  // Rivers/valleys: carve narrow channels so lowlands become water/sand corridors.
-  const r0 = fbm2(x * 0.0022 + 900.0, z * 0.0022 - 600.0, 4, 2.0, 0.5); // ~[-1,1]
-  const r01 = (r0 + 1) * 0.5;
-  const riverMask = 1.0 - smoothstep(0.78, 0.92, r01); // 1 near "river line", 0 elsewhere
-  const riverDepth = riverMask * 18;
-  top = Math.floor(top - riverDepth);
-
+  const info = biomeAt(x, z);
+  const biome = info.biome;
+  const jagBits = biomeJaggedBits(biome);
+  const localJag = jaggedFromSeed(hash2i(x, z), jagBits) * biomeJaggedAmp(biome);
+  let top = Math.floor(bilerp(h00, h10, h01, h11, tx, tz) + localJag);
   top = Math.max(1, Math.min(WORLD_H - 5, top));
 
-  // Terrain class:
-  // 0 plains, 1 forest, 2 desert, 3 mountains, 4 taiga, 5 snowy, 6 swamp
-  let biome = baseForest ? BIOME.FOREST : BIOME.PLAINS;
-  if (temp01 > 0.72 && moist01 < 0.32) biome = BIOME.DESERT;
-  else if (temp01 < 0.18) biome = BIOME.SNOWY;
-  else if (temp01 < 0.35) biome = BIOME.TAIGA;
-  else if (moist01 > 0.78 && land > 0.35 && top <= SEA_LEVEL + 10) biome = BIOME.SWAMP;
+  // Mirrored underground: mirror heightmap around sea level and carve a cavity.
+  const mirrorBase = clamp(SEA_LEVEL * 2 - top, 4, SEA_LEVEL - 4);
+  const caveDepth = 3 + (hash2i(x * 3, z * 5) & 3);
+  const mirrorCeil = mirrorBase;
+  const mirrorFloor = Math.max(2, mirrorBase - caveDepth);
 
-  // Mountains only on sharp/high ridgelines.
-  const isMountainPeak = (mMask > 0.50) && (ridSharp > 0.66) && (top > SEA_LEVEL + 22);
-  if (isMountainPeak) biome = BIOME.MOUNTAIN;
-
-  // Hilliness proxy: helps place "rare trees on hills" while keeping plains mostly empty.
-  const hilliness = clamp01(Math.abs(hills) * 0.55 + ridSharp * 0.55);
-
-  // Trees (avoid mountains + avoid underwater)
   let tree = null;
   let cactus = null;
   if (top >= SEA_LEVEL + 1 && top <= WORLD_H - 10) {
     const r = hash2f(x * 3, z * 3);
     if (biome === BIOME.DESERT) {
-      const p = 0.010;
-      if (r < p) {
+      if (r < 0.012) {
         const height = 2 + Math.floor(hash2f(x + 17, z - 9) * 3); // 2..4
         cactus = { top, height };
       }
-    } else if (biome !== BIOME.MOUNTAIN) {
-      // Prefer hills: plains almost bare; hills have rare trees; forests still have more (but not spammy).
-      const hillOK = (hilliness > 0.40);
-      let p = 0.0014; // very rare on flat plains
+    } else if (biome !== BIOME.OCEAN && biome !== BIOME.MOUNTAIN) {
+      let p = 0.002;
       let type = "oak";
       if (biome === BIOME.FOREST) { p = 0.020; type = "oak"; }
       else if (biome === BIOME.TAIGA) { p = 0.016; type = "pine"; }
-      else if (biome === BIOME.SNOWY) { p = 0.008; type = "pine"; }
+      else if (biome === BIOME.SNOWY) { p = 0.010; type = "pine"; }
       else if (biome === BIOME.SWAMP) { p = 0.018; type = "swamp"; }
-      else if (hillOK) { p = 0.010; type = "oak"; }
+      else if (biome === BIOME.PLAINS) { p = 0.004; type = "oak"; }
 
       if (r < p) {
         let trunkH = 4 + Math.floor(hash2f(x - 11, z + 7) * 4); // 4..7
@@ -3997,11 +3946,7 @@ function getColumn(x, z) {
     marker = { y: top + 1 };
   }
 
-  const rav0 = fbm2(x * 0.0036 + 1200.0, z * 0.0036 - 500.0, 3, 2.0, 0.5);
-  const rav01 = (rav0 + 1) * 0.5;
-  const ravineMask = 1.0 - smoothstep(0.82, 0.94, rav01);
-
-  c = { top, biome, tree, cactus, riverMask, ravineMask, marker };
+  c = { top, biome, tree, cactus, mirrorCeil, mirrorFloor, marker };
   columnMemo.set(key, c);
   if (columnMemo.size > 60000) columnMemo.clear(); // bounded memory, deterministic refill
   return c;
@@ -4014,14 +3959,14 @@ function getColumn(x, z) {
       if (y < 0 || y >= WORLD_H) return B.AIR;
       if (y === 0) return B.BEDROCK;
 
-      function oreInStone() {
-        // Only replace stone/cobble layers (not dirt/sand/etc). Simple depth-biased distribution.
+      function oreForDepth() {
+        // Low-cost ore placement: only at the mirrored cave floors.
         const r = hash3f(x, y, z);
-        if (y <= 12 && r < 0.0045) return B.DIAMOND_ORE;
-        if (y <= 26 && r < 0.0075) return B.GOLD_ORE;
-        if (y <= 54 && r < 0.0150) return B.IRON_ORE;
-        if (y <= 92 && r < 0.0220) return B.COAL_ORE;
-        return oreInStone();
+        if (y <= 10 && r < 0.40) return B.DIAMOND_ORE;
+        if (y <= 20 && r < 0.45) return B.GOLD_ORE;
+        if (y <= 42 && r < 0.55) return B.IRON_ORE;
+        if (y <= 80 && r < 0.70) return B.COAL_ORE;
+        return B.COBBLE;
       }
 
       const col = getColumn(x, z);
@@ -4076,29 +4021,16 @@ function getColumn(x, z) {
 
       // above ground
       if (y > top) {
-        // oceans/lakes: fill up to SEA_LEVEL
         if (top < SEA_LEVEL && y <= SEA_LEVEL) return B.WATER;
         return B.AIR;
       }
 
       const beach = (top <= SEA_LEVEL + 1);
 
-      if (col.riverMask > 0.68 && y >= SEA_LEVEL - 2) {
-        if (y <= SEA_LEVEL) return B.WATER;
+      // Mirrored underground: carve cave volume and place ore at the lowest point.
+      if (y <= col.mirrorCeil && y >= col.mirrorFloor) {
+        if (y === col.mirrorFloor) return oreForDepth();
         return B.AIR;
-      }
-
-      if (col.ravineMask > 0.70 && y < top && y >= Math.max(2, top - 44)) {
-        const depthT = (y - (top - 44)) / 44;
-        const width = 0.7 - depthT * 0.45;
-        const r = Math.abs(fbm2(x * 0.02 + 200.0, z * 0.02 - 350.0, 2, 2.0, 0.5));
-        if (r > width) return (y <= SEA_LEVEL ? B.WATER : B.AIR);
-      }
-
-      if (y < SEA_LEVEL - 4 && y > 2) {
-        const cave = fbm3(x * 0.055, y * 0.055, z * 0.055, 3, 2.2, 0.5);
-        const pocket = fbm3(x * 0.11 + 50.0, y * 0.11, z * 0.11 - 20.0, 2, 2.0, 0.5);
-        if (cave > 0.28 && pocket > 0.05) return B.AIR;
       }
 
       const surface =
@@ -4107,6 +4039,8 @@ function getColumn(x, z) {
           biome === BIOME.DESERT ? B.SAND :
           biome === BIOME.SNOWY ? B.WOOL_WHITE :
           biome === BIOME.SWAMP ? B.DIRT :
+          biome === BIOME.TAIGA ? B.GRASS :
+          biome === BIOME.OCEAN ? B.SAND :
           B.GRASS);
 
       if (y === top) return surface;
@@ -4126,7 +4060,6 @@ function getColumn(x, z) {
         return B.COBBLE;
       }
 
-      // plains/forest
       if (surface === B.WOOL_WHITE) {
         if (depth <= 2) return B.DIRT;
         return B.COBBLE;
@@ -4141,6 +4074,9 @@ function getColumn(x, z) {
     // ======================================================
     const chunkEdits = new Map(); // "cx,cz" -> Map(localIndex -> blockId)
     const chunkEditMaxY = new Map(); // \"cx,cz\" -> highest edited Y (for mesh scan cap)
+    const chunkEditVersion = new Map(); // \"cx,cz\" -> monotonic edit version
+    const chunkDataCache = new Map(); // \"cx,cz\" -> {data,H,yMax,version}
+    const CHUNK_CACHE_MAX = (RADIUS * 2 + 1) * (RADIUS * 2 + 1) * 2;
     function chunkKey(cx, cz) { return cx + "," + cz; }
 
     function floorDiv(a, b) {
@@ -4171,6 +4107,8 @@ function getColumn(x, z) {
       let m = chunkEdits.get(key);
       if (!m) { m = new Map(); chunkEdits.set(key, m); }
       m.set(localIndex(lx, y, lz), blockId);
+      chunkEditVersion.set(key, (chunkEditVersion.get(key) || 0) + 1);
+      chunkDataCache.delete(key);
       // Track highest edited altitude so chunk meshing doesn't scan empty sky.
       if (blockId !== B.AIR) {
         const prev = chunkEditMaxY.get(key);
@@ -4324,25 +4262,51 @@ function estimateChunkYMax(cx, cz) {
   return maxY | 0;
 }
 
+function touchChunkCache(key, entry) {
+  if (chunkDataCache.has(key)) chunkDataCache.delete(key);
+  chunkDataCache.set(key, entry);
+  if (chunkDataCache.size > CHUNK_CACHE_MAX) {
+    const oldest = chunkDataCache.keys().next().value;
+    chunkDataCache.delete(oldest);
+  }
+}
+
+function getChunkData(cx, cz) {
+  const key = chunkKey(cx, cz);
+  const version = chunkEditVersion.get(key) || 0;
+  const cached = chunkDataCache.get(key);
+  if (cached && cached.version === version) {
+    touchChunkCache(key, cached);
+    return cached;
+  }
+
+  const wx0 = cx * CHUNK;
+  const wz0 = cz * CHUNK;
+  const yMax = estimateChunkYMax(cx, cz);
+  const H = Math.min(WORLD_H, yMax + 3);
+  const data = new Uint8Array(CHUNK * CHUNK * H);
+  const idx = (lx, lz, y) => (y * CHUNK + lz) * CHUNK + lx;
+
+  for (let y=0; y<H; y++) {
+    for (let lz=0; lz<CHUNK; lz++) for (let lx=0; lx<CHUNK; lx++) {
+      const wx = wx0 + lx;
+      const wz = wz0 + lz;
+      data[idx(lx,lz,y)] = getBlock(wx, y, wz);
+    }
+  }
+
+  const entry = { data, H, yMax, version };
+  touchChunkCache(key, entry);
+  return entry;
+}
+
         function buildChunkMeshes(cx, cz) {
       const wx0 = cx * CHUNK;
       const wz0 = cz * CHUNK;
 
       // cache voxel values for the chunk (avoid scanning empty sky)
-      const yMax = estimateChunkYMax(cx, cz);
-
-      // cache voxel values for the chunk (16*16*(H) = small, avoids scanning empty sky)
-      const H = Math.min(WORLD_H, yMax + 3);
-      const data = new Uint8Array(CHUNK * CHUNK * H);
+      const { data, H, yMax } = getChunkData(cx, cz);
       const idx = (lx, lz, y) => (y * CHUNK + lz) * CHUNK + lx;
-
-      for (let y=0; y<H; y++) {
-        for (let lz=0; lz<CHUNK; lz++) for (let lx=0; lx<CHUNK; lx++) {
-          const wx = wx0 + lx;
-          const wz = wz0 + lz;
-          data[idx(lx,lz,y)] = getBlock(wx, y, wz);
-        }
-      }
 
       function getLocal(lx,lz,y){
         if (y < 0) return B.AIR;
