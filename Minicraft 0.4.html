@@ -3371,6 +3371,27 @@ n = (n ^ (n >>> 13)) >>> 0;
         default: return -y;
       }
     }
+    function grad3(h, x, y, z) {
+      // 12-ish gradient directions
+      switch (h & 15) {
+        case 0:  return  x + y;
+        case 1:  return -x + y;
+        case 2:  return  x - y;
+        case 3:  return -x - y;
+        case 4:  return  x + z;
+        case 5:  return -x + z;
+        case 6:  return  x - z;
+        case 7:  return -x - z;
+        case 8:  return  y + z;
+        case 9:  return -y + z;
+        case 10: return  y - z;
+        case 11: return -y - z;
+        case 12: return  x + y;
+        case 13: return -x + y;
+        case 14: return  x - y;
+        default: return -x - y;
+      }
+    }
     function perlin2(x, y) {
       const xi = Math.floor(x), yi = Math.floor(y);
       const xf = x - xi,      yf = y - yi;
@@ -3386,11 +3407,45 @@ n = (n ^ (n >>> 13)) >>> 0;
       // roughly normalize into [-1,1]
       return lerp(x1, x2, v) * 0.70710678;
     }
+    function perlin3(x, y, z) {
+      const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+      const xf = x - xi,      yf = y - yi,      zf = z - zi;
+      const u = fade(xf),     v = fade(yf),     w = fade(zf);
+
+      const aaa = hash3i(xi,     yi,     zi);
+      const baa = hash3i(xi + 1, yi,     zi);
+      const aba = hash3i(xi,     yi + 1, zi);
+      const bba = hash3i(xi + 1, yi + 1, zi);
+      const aab = hash3i(xi,     yi,     zi + 1);
+      const bab = hash3i(xi + 1, yi,     zi + 1);
+      const abb = hash3i(xi,     yi + 1, zi + 1);
+      const bbb = hash3i(xi + 1, yi + 1, zi + 1);
+
+      const x1 = lerp(grad3(aaa, xf,     yf,     zf),     grad3(baa, xf - 1, yf,     zf),     u);
+      const x2 = lerp(grad3(aba, xf,     yf - 1, zf),     grad3(bba, xf - 1, yf - 1, zf),     u);
+      const y1 = lerp(x1, x2, v);
+
+      const x3 = lerp(grad3(aab, xf,     yf,     zf - 1), grad3(bab, xf - 1, yf,     zf - 1), u);
+      const x4 = lerp(grad3(abb, xf,     yf - 1, zf - 1), grad3(bbb, xf - 1, yf - 1, zf - 1), u);
+      const y2 = lerp(x3, x4, v);
+
+      return lerp(y1, y2, w) * 0.70710678;
+    }
 
     function fbm2(x, y, octaves = 5, lacunarity = 2.0, gain = 0.5) {
       let sum = 0, amp = 1, freq = 1, norm = 0;
       for (let i = 0; i < octaves; i++) {
         sum += amp * perlin2(x * freq, y * freq);
+        norm += amp;
+        amp *= gain;
+        freq *= lacunarity;
+      }
+      return sum / (norm || 1);
+    }
+    function fbm3(x, y, z, octaves = 4, lacunarity = 2.0, gain = 0.5) {
+      let sum = 0, amp = 1, freq = 1, norm = 0;
+      for (let i = 0; i < octaves; i++) {
+        sum += amp * perlin3(x * freq, y * freq, z * freq);
         norm += amp;
         amp *= gain;
         freq *= lacunarity;
@@ -3414,7 +3469,16 @@ n = (n ^ (n >>> 13)) >>> 0;
 
     // Column memo to avoid doing noise repeatedly for each y in the same (x,z) column.
     // This keeps WORLD_H large without tanking chunk meshing.
-    const columnMemo = new Map(); // "x,z" -> {top, biome, tree}
+    const BIOME = {
+      PLAINS: 0,
+      FOREST: 1,
+      DESERT: 2,
+      MOUNTAIN: 3,
+      TAIGA: 4,
+      SNOWY: 5,
+      SWAMP: 6,
+    };
+    const columnMemo = new Map(); // "x,z" -> {top, biome, tree, cactus, riverMask, ravineMask, marker}
 
 function getColumn(x, z) {
   const key = x + "," + z;
@@ -3453,6 +3517,8 @@ function getColumn(x, z) {
   // Temperature / moisture => base biomes
   const temp  = fbm2(x * 0.0012 + 100.0, z * 0.0012 - 40.0, 3, 2.0, 0.5);
   const moist = fbm2(x * 0.0012 - 50.0,  z * 0.0012 + 80.0, 3, 2.0, 0.5);
+  const temp01 = (temp + 1) * 0.5;
+  const moist01 = (moist + 1) * 0.5;
   const baseForest = (moist > 0.22); // forest coverage knob
 
   // Plains flatter than forests; both modulated by erosion.
@@ -3498,35 +3564,62 @@ function getColumn(x, z) {
   top = Math.max(1, Math.min(WORLD_H - 5, top));
 
   // Terrain class:
-  // 0 plains, 1 forest, 3 mountains (peaks only!)
-  let biome = baseForest ? 1 : 0;
+  // 0 plains, 1 forest, 2 desert, 3 mountains, 4 taiga, 5 snowy, 6 swamp
+  let biome = baseForest ? BIOME.FOREST : BIOME.PLAINS;
+  if (temp01 > 0.72 && moist01 < 0.32) biome = BIOME.DESERT;
+  else if (temp01 < 0.18) biome = BIOME.SNOWY;
+  else if (temp01 < 0.35) biome = BIOME.TAIGA;
+  else if (moist01 > 0.78 && land > 0.35 && top <= SEA_LEVEL + 10) biome = BIOME.SWAMP;
 
   // Mountains only on sharp/high ridgelines.
   const isMountainPeak = (mMask > 0.50) && (ridSharp > 0.66) && (top > SEA_LEVEL + 22);
-  if (isMountainPeak) biome = 3;
+  if (isMountainPeak) biome = BIOME.MOUNTAIN;
 
   // Hilliness proxy: helps place "rare trees on hills" while keeping plains mostly empty.
   const hilliness = clamp01(Math.abs(hills) * 0.55 + ridSharp * 0.55);
 
   // Trees (avoid mountains + avoid underwater)
   let tree = null;
-  if (biome !== 3 && top >= SEA_LEVEL + 1 && top <= WORLD_H - 10) {
-    // Prefer hills: plains almost bare; hills have rare trees; forests still have more (but not spammy).
-    const hillOK = (hilliness > 0.40);
+  let cactus = null;
+  if (top >= SEA_LEVEL + 1 && top <= WORLD_H - 10) {
     const r = hash2f(x * 3, z * 3);
+    if (biome === BIOME.DESERT) {
+      const p = 0.010;
+      if (r < p) {
+        const height = 2 + Math.floor(hash2f(x + 17, z - 9) * 3); // 2..4
+        cactus = { top, height };
+      }
+    } else if (biome !== BIOME.MOUNTAIN) {
+      // Prefer hills: plains almost bare; hills have rare trees; forests still have more (but not spammy).
+      const hillOK = (hilliness > 0.40);
+      let p = 0.0014; // very rare on flat plains
+      let type = "oak";
+      if (biome === BIOME.FOREST) { p = 0.020; type = "oak"; }
+      else if (biome === BIOME.TAIGA) { p = 0.016; type = "pine"; }
+      else if (biome === BIOME.SNOWY) { p = 0.008; type = "pine"; }
+      else if (biome === BIOME.SWAMP) { p = 0.018; type = "swamp"; }
+      else if (hillOK) { p = 0.010; type = "oak"; }
 
-    let p = 0.0014; // very rare on flat plains
-    if (biome === 1) p = 0.020;        // forest
-    else if (hillOK) p = 0.010;        // rare trees on hills
-
-    if (r < p) {
-      const trunkH = 4 + Math.floor(hash2f(x - 11, z + 7) * 4); // 4..7
-      const ly = Math.min(WORLD_H - 2, top + trunkH);
-      tree = { top, trunkH, ly };
+      if (r < p) {
+        let trunkH = 4 + Math.floor(hash2f(x - 11, z + 7) * 4); // 4..7
+        if (type === "pine") trunkH = 6 + Math.floor(hash2f(x + 13, z + 5) * 5); // 6..10
+        if (type === "swamp") trunkH = 3 + Math.floor(hash2f(x - 21, z + 3) * 3); // 3..5
+        const ly = Math.min(WORLD_H - 2, top + trunkH);
+        tree = { top, trunkH, ly, type };
+      }
     }
   }
 
-  c = { top, biome, tree };
+  let marker = null;
+  if (!tree && !cactus && top >= SEA_LEVEL + 2 && hash2f(x * 19, z * 19) < 0.00018) {
+    marker = { y: top + 1 };
+  }
+
+  const rav0 = fbm2(x * 0.0036 + 1200.0, z * 0.0036 - 500.0, 3, 2.0, 0.5);
+  const rav01 = (rav0 + 1) * 0.5;
+  const ravineMask = 1.0 - smoothstep(0.82, 0.94, rav01);
+
+  c = { top, biome, tree, cactus, riverMask, ravineMask, marker };
   columnMemo.set(key, c);
   if (columnMemo.size > 60000) columnMemo.clear(); // bounded memory, deterministic refill
   return c;
@@ -3551,6 +3644,9 @@ function getColumn(x, z) {
 
       const col = getColumn(x, z);
       const top = col.top;
+      const biome = col.biome;
+
+      if (col.marker && y === col.marker.y) return B.BRICKS;
 
       // trunk
       const ti = col.tree;
@@ -3558,16 +3654,42 @@ function getColumn(x, z) {
 
       // leaves (keep the previous "plus" canopy style)
       if (y >= 4) {
-        const candidates = [[x, z], [x - 1, z], [x + 1, z], [x, z - 1], [x, z + 1]];
-        for (const [tx, tz] of candidates) {
-          const inf = treeInfo(tx, tz);
-          if (!inf) continue;
-          if (y !== inf.ly) continue;
-          const dx = x - tx, dz = z - tz;
-          if ((dx === 0 && Math.abs(dz) <= 1) || (dz === 0 && Math.abs(dx) <= 1)) {
-            if (!(dx === 0 && dz === 0)) return B.LEAVES;
+        for (let dz = -2; dz <= 2; dz++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            const tx = x + dx;
+            const tz = z + dz;
+            const inf = treeInfo(tx, tz);
+            if (!inf) continue;
+            const adx = Math.abs(dx);
+            const adz = Math.abs(dz);
+            const treeType = inf.type || "oak";
+            if (treeType === "pine") {
+              const relY = y - (inf.top + inf.trunkH);
+              if (relY <= 0 && relY >= -3) {
+                const radius = 2 - Math.abs(relY);
+                if (adx <= radius && adz <= radius && (adx + adz) > 0) return B.LEAVES;
+              }
+              continue;
+            }
+            if (treeType === "swamp") {
+              const canopyY = inf.top + inf.trunkH;
+              if (y === canopyY || y === canopyY - 1) {
+                if (adx <= 2 && adz <= 2 && (adx + adz) > 0) return B.LEAVES;
+              } else if (y === canopyY - 2) {
+                if (adx <= 1 && adz <= 1 && (adx + adz) > 0) return B.LEAVES;
+              }
+              continue;
+            }
+            if (y !== inf.ly) continue;
+            if ((adx === 0 && adz <= 1) || (adz === 0 && adx <= 1)) {
+              if (!(adx === 0 && adz === 0)) return B.LEAVES;
+            }
           }
         }
+      }
+
+      if (col.cactus && y > col.cactus.top && y <= col.cactus.top + col.cactus.height) {
+        return B.WOOL_GREEN;
       }
 
       // above ground
@@ -3577,12 +3699,33 @@ function getColumn(x, z) {
         return B.AIR;
       }
 
-      const biome = col.biome;
       const beach = (top <= SEA_LEVEL + 1);
+
+      if (col.riverMask > 0.68 && y >= SEA_LEVEL - 2) {
+        if (y <= SEA_LEVEL) return B.WATER;
+        return B.AIR;
+      }
+
+      if (col.ravineMask > 0.70 && y < top && y >= Math.max(2, top - 44)) {
+        const depthT = (y - (top - 44)) / 44;
+        const width = 0.7 - depthT * 0.45;
+        const r = Math.abs(fbm2(x * 0.02 + 200.0, z * 0.02 - 350.0, 2, 2.0, 0.5));
+        if (r > width) return (y <= SEA_LEVEL ? B.WATER : B.AIR);
+      }
+
+      if (y < SEA_LEVEL - 4 && y > 2) {
+        const cave = fbm3(x * 0.055, y * 0.055, z * 0.055, 3, 2.2, 0.5);
+        const pocket = fbm3(x * 0.11 + 50.0, y * 0.11, z * 0.11 - 20.0, 2, 2.0, 0.5);
+        if (cave > 0.28 && pocket > 0.05) return B.AIR;
+      }
 
       const surface =
         beach ? B.SAND :
-        (biome === 3 ? B.COBBLE : B.GRASS);
+        (biome === BIOME.MOUNTAIN ? B.COBBLE :
+          biome === BIOME.DESERT ? B.SAND :
+          biome === BIOME.SNOWY ? B.WOOL_WHITE :
+          biome === BIOME.SWAMP ? B.DIRT :
+          B.GRASS);
 
       if (y === top) return surface;
 
@@ -3595,13 +3738,17 @@ function getColumn(x, z) {
       }
 
       // mountains: more stone showing
-      if (biome === 3) {
+      if (biome === BIOME.MOUNTAIN) {
         if (depth <= 1) return B.COBBLE;
         if (depth <= 3) return B.DIRT;
         return B.COBBLE;
       }
 
       // plains/forest
+      if (surface === B.WOOL_WHITE) {
+        if (depth <= 2) return B.DIRT;
+        return B.COBBLE;
+      }
       if (depth <= 2) return B.DIRT;
       return B.COBBLE;
     }
